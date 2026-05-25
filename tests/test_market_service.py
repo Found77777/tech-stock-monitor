@@ -1,6 +1,7 @@
 import pandas as pd
 
-from app.database import SessionLocal
+from app import models  # noqa: F401
+from app.database import Base, SessionLocal, engine
 from app.models import StockSnapshot
 from app.services.market_data_service import MarketDataService
 
@@ -21,6 +22,7 @@ def test_filter_tech_universe():
 
 
 def test_refresh_insert_flow():
+    Base.metadata.create_all(bind=engine)
     svc = MarketDataService(source=MockSource())
     db = SessionLocal()
     try:
