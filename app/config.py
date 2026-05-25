@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     database_url: str = Field(default=f"sqlite:///{BASE_DIR / 'data' / 'tech_monitor.db'}")
 
     data_source_provider: str = Field(default="akshare")
+    real_data_source: str = Field(default="akshare")
     tushare_token: str = Field(default="")
     min_amount: float = Field(default=30_000_000)
     use_mock_data: bool = Field(default=False)

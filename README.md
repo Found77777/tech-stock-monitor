@@ -34,3 +34,14 @@ streamlit run dashboard/streamlit_app.py
 ### Codex 容器提示
 在部分代理网络环境下，AKShare 上游接口可能被阻断。
 可在 `.env` 中设置 `USE_MOCK_DATA=true`，用于验证完整系统链路（refresh/history/signals/scores/watchlist）。
+
+### 使用新浪实时数据源
+在 `.env` 中设置：
+
+```
+REAL_DATA_SOURCE=sina
+USE_MOCK_DATA=false
+```
+
+说明：AKShare 的 `stock_zh_a_spot_em` 底层依赖东方财富，某些代理网络会被阻断。
+此时可切换到新浪实时接口（非东方财富）进行本地稳定验证。

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.data_sources.akshare_source import AKShareDataSource
 from app.data_sources.mock_source import MockDataSource
+from app.data_sources.sina_source import SinaDataSource
 from app.models import StockSnapshot
 from app.utils.logger import get_logger
 
@@ -18,9 +19,21 @@ TECH_KEYWORDS = ["半导体", "通信", "软件", "IT", "电子", "元器件", "
 
 
 class MarketDataService:
+    def _build_default_source(self):
+        if self.settings.use_mock_data:
+            return MockDataSource()
+        source = str(self.settings.real_data_source).lower()
+        if source == "sina":
+            return SinaDataSource()
+        if source == "akshare":
+            return AKShareDataSource()
+        if source == "mock":
+            return MockDataSource()
+        return AKShareDataSource()
+
     def __init__(self, source: AKShareDataSource | MockDataSource | None = None) -> None:
         self.settings = get_settings()
-        self.source = source or (MockDataSource() if self.settings.use_mock_data else AKShareDataSource())
+        self.source = source or self._build_default_source()
 
     @staticmethod
     def filter_tech_universe(df: pd.DataFrame, min_amount: float, keyword_col: str = "name") -> pd.DataFrame:
