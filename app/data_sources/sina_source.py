@@ -19,26 +19,35 @@ class SinaDataSource(BaseDataSource):
     @staticmethod
     def _to_sina_symbol(code: str) -> str:
         code = str(code)
+        if code.startswith(("sh", "sz")):
+            return code
         return ("sh" + code) if code.startswith("6") else ("sz" + code)
 
-    def get_realtime_quotes(self, symbols: list[str]) -> pd.DataFrame:
-        # If symbols empty, use a broad A-share tech candidate basket.
-        if not symbols:
-            symbols = [
-                "300308", "601138", "688256", "688041", "688981", "002371", "002463", "002916", "002475", "002241",
-                "000977", "000938", "603019", "600845", "600588", "002410", "002230", "002236", "002415", "603986",
-                "603501", "688008", "300782", "600183", "603228", "300476", "300024", "002747", "300124", "688777",
-            ]
-        sina_symbols = [self._to_sina_symbol(s) for s in symbols]
-        headers = {"Referer": "https://finance.sina.com.cn"}
+    def _build_headers(self) -> dict[str, str]:
+        headers = {
+            "Referer": "https://finance.sina.com.cn",
+            "Accept": "*/*",
+            "Connection": "keep-alive",
+        }
         if self.settings.sina_user_agent:
             headers["User-Agent"] = self.settings.sina_user_agent
         if self.settings.sina_cookie:
             headers["Cookie"] = self.settings.sina_cookie
-        resp = requests.get(self.BASE_URL + ",".join(sina_symbols), headers=headers, timeout=15)
-        resp.raise_for_status()
-        resp.encoding = "gbk"
-        return self.normalize_sina_text(resp.text)
+        return headers
+
+    def get_realtime_quotes(self, symbols: list[str]) -> pd.DataFrame:
+        if not symbols:
+            return pd.DataFrame(columns=["code","name","price","pct_change","change","volume","amount","turnover_rate","pe","pb","total_market_cap","float_market_cap","timestamp"])
+        sina_symbols = [self._to_sina_symbol(s) for s in symbols]
+        parts = []
+        headers = self._build_headers()
+        for i in range(0, len(sina_symbols), 50):
+            batch = sina_symbols[i:i+50]
+            resp = requests.get(self.BASE_URL + ",".join(batch), headers=headers, timeout=15)
+            resp.raise_for_status()
+            resp.encoding = "gbk"
+            parts.append(self.normalize_sina_text(resp.text))
+        return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
 
     def normalize_sina_text(self, text: str) -> pd.DataFrame:
         rows = []
@@ -63,27 +72,10 @@ class SinaDataSource(BaseDataSource):
                 prev_close, price, volume, amount = 0.0, 0.0, 0.0, 0.0
             change = (price - prev_close) if prev_close else 0.0
             pct_change = (change / prev_close * 100) if prev_close else 0.0
-            rows.append(
-                {
-                    "code": code,
-                    "name": name,
-                    "price": round(price, 3) if price else 0.0,
-                    "pct_change": round(pct_change, 3) if prev_close else 0.0,
-                    "change": round(change, 3) if prev_close else 0.0,
-                    "volume": volume,
-                    "amount": amount,
-                    "turnover_rate": None,
-                    "pe": None,
-                    "pb": None,
-                    "total_market_cap": None,
-                    "float_market_cap": None,
-                    "timestamp": now,
-                }
-            )
+            rows.append({"code": code,"name": name,"price": round(price, 3) if price else 0.0,"pct_change": round(pct_change, 3) if prev_close else 0.0,"change": round(change, 3) if prev_close else 0.0,"volume": volume,"amount": amount,"turnover_rate": None,"pe": None,"pb": None,"total_market_cap": None,"float_market_cap": None,"timestamp": now})
         return pd.DataFrame(rows)
 
     def fetch_daily_bars(self, code: str, start_date: str, end_date: str) -> pd.DataFrame:
-        # TODO: Sina daily kline endpoint integration can be added later.
         return pd.DataFrame(columns=["code", "name", "trade_date", "open", "high", "low", "close", "volume", "amount", "pct_change", "turnover_rate"])
 
     def get_basic_info(self, symbols: list[str]) -> list[dict[str, str]]:

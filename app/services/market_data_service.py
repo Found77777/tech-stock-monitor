@@ -9,14 +9,13 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.data_sources.akshare_source import AKShareDataSource
 from app.data_sources.mock_source import MockDataSource
-from app.data_sources.sina_source import SinaDataSource
 from app.data_sources.pytdx_source import PytdxDataSource
+from app.data_sources.sina_source import SinaDataSource
 from app.models import StockSnapshot
+from app.universe.tech_universe import get_tech_universe_codes
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
-
-TECH_KEYWORDS = ["半导体", "通信", "软件", "IT", "电子", "元器件", "PCB", "机器人", "工业", "数据", "算力", "AI"]
 
 
 class MarketDataService:
@@ -41,16 +40,15 @@ class MarketDataService:
     @staticmethod
     def filter_tech_universe(df: pd.DataFrame, min_amount: float, keyword_col: str = "name") -> pd.DataFrame:
         f = df.copy()
-        f = f[~f["name"].str.contains("ST", na=False)]
-        f = f[~f["code"].astype(str).str.startswith(("300", "301", "8", "4"))]
+        f = f[~f["name"].astype(str).str.contains(r"\*?ST", na=False)]
+        f = f[f["code"].astype(str).str.startswith(("600","601","603","605","000","001","002"))]
         f = f[f["amount"] >= min_amount]
-        # TODO: replace with industry taxonomy (SW/CSRC/concept boards) once integrated.
-        kw_mask = f[keyword_col].str.contains("|".join(TECH_KEYWORDS), case=False, na=False)
-        return f[kw_mask]
+        return f
 
     def refresh_snapshot(self, db: Session) -> dict[str, Any]:
         logger.info("market refresh start mode=%s", "MOCK" if self.settings.use_mock_data else "REAL")
-        df = self.source.get_realtime_quotes([])
+        universe_codes = get_tech_universe_codes() if not self.settings.use_mock_data else []
+        df = self.source.get_realtime_quotes(universe_codes)
         raw_count = len(df)
         filtered = self.filter_tech_universe(df, self.settings.min_amount)
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -64,8 +62,8 @@ class MarketDataService:
             db.add(StockSnapshot(**row))
             inserted += 1
         db.commit()
-        logger.info("market refresh done raw=%s filtered=%s inserted=%s", raw_count, len(filtered), inserted)
-        return {"raw_count": raw_count, "filtered_count": len(filtered), "inserted_count": inserted, "timestamp": ts}
+        logger.info("market refresh done universe=%s raw=%s filtered=%s inserted=%s", len(universe_codes), raw_count, len(filtered), inserted)
+        return {"universe_count": len(universe_codes) if universe_codes else raw_count, "raw_count": raw_count, "filtered_count": len(filtered), "inserted_count": inserted, "timestamp": ts}
 
     def latest_snapshot(self, db: Session) -> list[dict[str, Any]]:
         ts = db.query(StockSnapshot.timestamp).order_by(desc(StockSnapshot.timestamp)).limit(1).scalar()
@@ -81,7 +79,7 @@ class MarketDataService:
         return {
             "by_pct_change": sorted(latest, key=lambda x: x["pct_change"], reverse=True)[:limit],
             "by_amount": sorted(latest, key=lambda x: x["amount"], reverse=True)[:limit],
-            "by_turnover": sorted(latest, key=lambda x: x["turnover_rate"], reverse=True)[:limit],
+            "by_turnover": sorted(latest, key=lambda x: (x["turnover_rate"] or 0), reverse=True)[:limit],
         }
 
     @staticmethod

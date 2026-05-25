@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     tushare_token: str = Field(default="")
     sina_user_agent: str | None = Field(default=None)
     sina_cookie: str | None = Field(default=None)
-    min_amount: float = Field(default=30_000_000)
+    min_amount: float = Field(default=50_000_000)
     use_mock_data: bool = Field(default=False)
 
     scheduler_timezone: str = Field(default="Asia/Shanghai")
