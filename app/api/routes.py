@@ -9,6 +9,7 @@ from app.services.history_data_service import HistoryDataService
 from app.services.market_data_service import MarketDataService
 from app.services.backtest_service import BacktestService
 from app.universe.tech_universe import get_mock_tech_universe
+from app.utils.json_utils import sanitize_for_json
 
 router = APIRouter()
 market_service = MarketDataService()
@@ -52,36 +53,36 @@ def signals_generate(db: Session = Depends(get_db)):
 
 @router.get('/signals/latest')
 def signals_latest(db: Session = Depends(get_db)):
-    return analysis_service.latest_signals(db)
+    return sanitize_for_json(analysis_service.latest_signals(db))
 
 @router.post('/scores/generate')
 def scores_generate(db: Session = Depends(get_db)):
-    return analysis_service.generate_scores(db)
+    return sanitize_for_json(analysis_service.generate_scores(db))
 
 @router.get('/scores/latest')
 def scores_latest(db: Session = Depends(get_db)):
-    return analysis_service.latest_scores(db)
+    return sanitize_for_json(analysis_service.latest_scores(db))
 
 @router.get('/watchlist/top')
 def watchlist_top(limit: int = 20, db: Session = Depends(get_db)):
-    return analysis_service.latest_scores(db)[:limit]
+    return sanitize_for_json(analysis_service.latest_scores(db))[:limit]
 
 @router.post("/backtest/factor-ic")
 def backtest_factor_ic(db: Session = Depends(get_db)):
-    return backtest_service.run_factor_ic_test(db)
+    return sanitize_for_json(backtest_service.run_factor_ic_test(db))
 
 @router.post("/backtest/factor-groups")
 def backtest_factor_groups(groups: int = 5, db: Session = Depends(get_db)):
-    return backtest_service.run_factor_group_test(db, groups=groups)
+    return sanitize_for_json(backtest_service.run_factor_group_test(db, groups=groups))
 
 @router.post("/backtest/signals")
 def backtest_signals(db: Session = Depends(get_db)):
-    return backtest_service.run_signal_event_study(db)
+    return sanitize_for_json(backtest_service.run_signal_event_study(db))
 
 @router.post("/backtest/top-score")
 def backtest_top_score(top_n: int = 20, hold_days: int = 5, transaction_cost_bps: float = 0.0, db: Session = Depends(get_db)):
-    return backtest_service.run_top_score_backtest(db, top_n=top_n, hold_days=hold_days, transaction_cost_bps=transaction_cost_bps)
+    return sanitize_for_json(backtest_service.run_top_score_backtest(db, top_n=top_n, hold_days=hold_days, transaction_cost_bps=transaction_cost_bps))
 
 @router.get("/backtest/results/latest")
 def backtest_results_latest(db: Session = Depends(get_db)):
-    return backtest_service.latest_results(db)
+    return sanitize_for_json(backtest_service.latest_results(db))
