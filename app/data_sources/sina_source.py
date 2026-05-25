@@ -1,4 +1,4 @@
-"""Sina real-time quote source (non-EastMoney)."""
+"""Sina/Tencent-compatible quote source (non-EastMoney)."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -24,11 +24,7 @@ class SinaDataSource(BaseDataSource):
         return ("sh" + code) if code.startswith("6") else ("sz" + code)
 
     def _build_headers(self) -> dict[str, str]:
-        headers = {
-            "Referer": "https://finance.sina.com.cn",
-            "Accept": "*/*",
-            "Connection": "keep-alive",
-        }
+        headers = {"Referer": "https://finance.sina.com.cn", "Accept": "*/*", "Connection": "keep-alive"}
         if self.settings.sina_user_agent:
             headers["User-Agent"] = self.settings.sina_user_agent
         if self.settings.sina_cookie:
@@ -42,8 +38,7 @@ class SinaDataSource(BaseDataSource):
         parts = []
         headers = self._build_headers()
         for i in range(0, len(sina_symbols), 50):
-            batch = sina_symbols[i:i+50]
-            resp = requests.get(self.BASE_URL + ",".join(batch), headers=headers, timeout=15)
+            resp = requests.get(self.BASE_URL + ",".join(sina_symbols[i:i+50]), headers=headers, timeout=15)
             resp.raise_for_status()
             resp.encoding = "gbk"
             parts.append(self.normalize_sina_text(resp.text))
@@ -76,7 +71,27 @@ class SinaDataSource(BaseDataSource):
         return pd.DataFrame(rows)
 
     def fetch_daily_bars(self, code: str, start_date: str, end_date: str) -> pd.DataFrame:
-        return pd.DataFrame(columns=["code", "name", "trade_date", "open", "high", "low", "close", "volume", "amount", "pct_change", "turnover_rate"])
+        """Fetch daily bars from Tencent-compatible kline API (non-EastMoney)."""
+        symbol = self._to_sina_symbol(code)
+        url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={symbol},day,,,260,qfq"
+        resp = requests.get(url, headers=self._build_headers(), timeout=15)
+        resp.raise_for_status()
+        payload = resp.json()
+        node = payload.get("data", {}).get(symbol, {})
+        day = node.get("qfqday") or node.get("day") or []
+        if not day:
+            return pd.DataFrame(columns=["code", "name", "trade_date", "open", "high", "low", "close", "volume", "amount", "pct_change", "turnover_rate"])
+        rows = []
+        for item in day:
+            # [date, open, close, high, low, volume, ...]
+            d = str(item[0])
+            if d < start_date or d > end_date:
+                continue
+            o, c, h, l = map(float, item[1:5])
+            v = float(item[5]) if len(item) > 5 else 0.0
+            amt = float(item[6]) if len(item) > 6 else None
+            rows.append({"code": str(code), "name": str(code), "trade_date": d, "open": o, "high": h, "low": l, "close": c, "volume": v, "amount": amt, "pct_change": None, "turnover_rate": None})
+        return pd.DataFrame(rows)
 
     def get_basic_info(self, symbols: list[str]) -> list[dict[str, str]]:
         return [{"symbol": s, "name": s} for s in symbols]
