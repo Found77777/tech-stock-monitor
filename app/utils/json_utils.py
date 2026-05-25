@@ -12,13 +12,26 @@ def sanitize_for_json(obj: Any) -> Any:
     if obj is None:
         return None
 
+    # containers first: never coerce dict/list directly via float-like paths
+    if isinstance(obj, dict):
+        return {str(k): sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [sanitize_for_json(v) for v in obj]
+
+    if isinstance(obj, pd.DataFrame):
+        return sanitize_for_json(obj.to_dict(orient="records"))
+    if isinstance(obj, pd.Series):
+        return sanitize_for_json(obj.tolist())
+    if isinstance(obj, np.ndarray):
+        return sanitize_for_json(obj.tolist())
+
     if isinstance(obj, (np.integer,)):
         return int(obj)
     if isinstance(obj, (np.floating,)):
         val = float(obj)
         return None if (math.isnan(val) or math.isinf(val)) else val
 
-    if isinstance(obj, (float,)):
+    if isinstance(obj, float):
         return None if (math.isnan(obj) or math.isinf(obj)) else obj
     if isinstance(obj, (int, str, bool)):
         return obj
@@ -29,15 +42,5 @@ def sanitize_for_json(obj: Any) -> Any:
             return None
     except Exception:
         pass
-
-    if isinstance(obj, pd.DataFrame):
-        return sanitize_for_json(obj.to_dict(orient="records"))
-    if isinstance(obj, pd.Series):
-        return sanitize_for_json(obj.tolist())
-
-    if isinstance(obj, dict):
-        return {str(k): sanitize_for_json(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple, set)):
-        return [sanitize_for_json(v) for v in obj]
 
     return obj

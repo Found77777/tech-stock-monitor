@@ -28,3 +28,20 @@ def test_pandas_dataframe_serializable():
     assert out[1]["a"] is None
     assert out[0]["b"] is None
     json.dumps(out)
+
+
+def test_nested_dict_no_float_error():
+    out = sanitize_for_json({"a": {"b": 1.2}})
+    assert out == {"a": {"b": 1.2}}
+
+
+def test_nested_metrics_nan_cleaned():
+    out = sanitize_for_json({"metrics": {"sharpe": math.nan}})
+    assert out == {"metrics": {"sharpe": None}}
+
+
+def test_watchlist_like_reasons_no_float_cast():
+    payload = [{"code": "600100", "reasons": ["趋势正常", {"risk": "low"}], "total_score": 55.2}]
+    out = sanitize_for_json(payload)
+    assert out[0]["reasons"][1]["risk"] == "low"
+    json.dumps(out)
