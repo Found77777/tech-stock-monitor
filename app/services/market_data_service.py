@@ -10,6 +10,7 @@ from app.config import get_settings
 from app.data_sources.akshare_source import AKShareDataSource
 from app.data_sources.mock_source import MockDataSource
 from app.data_sources.sina_source import SinaDataSource
+from app.data_sources.pytdx_source import PytdxDataSource
 from app.models import StockSnapshot
 from app.utils.logger import get_logger
 
@@ -27,6 +28,8 @@ class MarketDataService:
             return SinaDataSource()
         if source == "akshare":
             return AKShareDataSource()
+        if source == "pytdx":
+            return PytdxDataSource()
         if source == "mock":
             return MockDataSource()
         return AKShareDataSource()
