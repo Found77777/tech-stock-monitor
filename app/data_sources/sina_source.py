@@ -6,11 +6,15 @@ from datetime import datetime
 import pandas as pd
 import requests
 
+from app.config import get_settings
 from app.data_sources.base import BaseDataSource
 
 
 class SinaDataSource(BaseDataSource):
     BASE_URL = "https://hq.sinajs.cn/list="
+
+    def __init__(self) -> None:
+        self.settings = get_settings()
 
     @staticmethod
     def _to_sina_symbol(code: str) -> str:
@@ -27,6 +31,10 @@ class SinaDataSource(BaseDataSource):
             ]
         sina_symbols = [self._to_sina_symbol(s) for s in symbols]
         headers = {"Referer": "https://finance.sina.com.cn"}
+        if self.settings.sina_user_agent:
+            headers["User-Agent"] = self.settings.sina_user_agent
+        if self.settings.sina_cookie:
+            headers["Cookie"] = self.settings.sina_cookie
         resp = requests.get(self.BASE_URL + ",".join(sina_symbols), headers=headers, timeout=15)
         resp.raise_for_status()
         resp.encoding = "gbk"

@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     data_source_provider: str = Field(default="akshare")
     real_data_source: str = Field(default="akshare")
     tushare_token: str = Field(default="")
+    sina_user_agent: str | None = Field(default=None)
+    sina_cookie: str | None = Field(default=None)
     min_amount: float = Field(default=30_000_000)
     use_mock_data: bool = Field(default=False)
 
