@@ -16,6 +16,21 @@ from app.signals.signal_engine import generate_signals
 
 
 class AnalysisService:
+    @staticmethod
+    def _safe_db_score(v):
+        import math
+        try:
+            x=float(v)
+        except Exception:
+            return 0.0
+        if math.isnan(x) or math.isinf(x):
+            return 0.0
+        if x < 0:
+            return 0.0
+        if x > 100:
+            return 100.0
+        return x
+
     def _latest_rows(self, db: Session) -> list[dict]:
         codes = [x[0] for x in db.query(DailyBar.code).group_by(DailyBar.code).all()]
         rows = []
@@ -61,6 +76,8 @@ class AnalysisService:
         inserted = 0
         for i, s in enumerate(scored, start=1):
             payload = {**s, "rank": i, "trade_date": td, "reasons": json.dumps(s["reasons"], ensure_ascii=False)}
+            for k in ["total_score","trend_score","momentum_score","relative_strength_score","liquidity_score","position_score","risk_penalty"]:
+                payload[k] = self._safe_db_score(payload.get(k))
             if db.query(StockScore).filter_by(code=s["code"], trade_date=td).first():
                 continue
             db.add(StockScore(**payload))
