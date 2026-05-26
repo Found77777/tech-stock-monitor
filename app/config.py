@@ -30,6 +30,13 @@ class Settings(BaseSettings):
 
     scheduler_timezone: str = Field(default="Asia/Shanghai")
 
+    # --- AI Agent settings ---
+    llm_api_key: str = Field(default="")
+    llm_base_url: str = Field(default="https://api.openai.com/v1")
+    llm_model: str = Field(default="gpt-4o-mini")
+    agent_news_sources: str = Field(default="sina,eastmoney,xueqiu")
+    agent_enabled: bool = Field(default=False)
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=False)
 
 

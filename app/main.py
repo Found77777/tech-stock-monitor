@@ -2,12 +2,14 @@
 from fastapi import FastAPI
 
 from app.api.routes import router
+from app.api.agent_routes import router as agent_router
 from app.config import get_settings
 from app.scheduler.jobs import build_scheduler
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name)
 app.include_router(router)
+app.include_router(agent_router, prefix="/agent", tags=["agent"])
 
 scheduler = build_scheduler()
 

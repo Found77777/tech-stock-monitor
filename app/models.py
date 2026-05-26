@@ -75,6 +75,21 @@ class StockScore(Base):
     reasons = Column(Text, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
+
+class NewsAnalysis(Base):
+    __tablename__ = "news_analysis"
+    __table_args__ = (UniqueConstraint("stock_code", "analysis_date", name="uq_news_code_date"),)
+    id = Column(Integer, primary_key=True)
+    stock_code = Column(String(20), index=True, nullable=False)
+    analysis_date = Column(String(16), index=True, nullable=False)
+    raw_analysis = Column(Text, nullable=True)
+    ai_sentiment_score = Column(Float, nullable=False, default=50.0)
+    ai_confidence = Column(Float, nullable=False, default=0.0)
+    ai_policy_boost = Column(Float, nullable=False, default=0.0)
+    ai_fundamental_boost = Column(Float, nullable=False, default=0.0)
+    ai_reasons = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
 class BacktestResult(Base):
     __tablename__ = "backtest_results"
     id = Column(Integer, primary_key=True)

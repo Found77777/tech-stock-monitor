@@ -107,10 +107,16 @@ class AnalysisService:
         rows = self._latest_rows(db)
         td = datetime.now().strftime("%Y-%m-%d")
         universe_name_map = self._universe_name_map()
+        ai_map = self._load_ai_analyses(db, td)
+        market_adj = self._load_market_adjustment(db, td)
+
         scored = []
         for r in rows:
-            s = compute_score(r)
             code = str(r["code"])
+            ai_data = ai_map.get(code, {})
+            ai_data.update(market_adj)
+            r["_ai_analysis"] = ai_data
+            s = compute_score(r)
             resolved_name = self._resolve_name(db, code, r.get("name"), universe_name_map)
             scored.append({"code": code, "name": resolved_name, **s})
         scored.sort(key=lambda x: x["total_score"], reverse=True)
@@ -146,3 +152,38 @@ class AnalysisService:
             return []
         res = db.query(StockScore).filter_by(trade_date=td).order_by(desc(StockScore.total_score)).all()
         return [{"code":x.code,"name":x.name,"total_score":x.total_score,"trend_score":x.trend_score,"momentum_score":x.momentum_score,"relative_strength_score":x.relative_strength_score,"liquidity_score":x.liquidity_score,"position_score":x.position_score,"risk_penalty":x.risk_penalty,"recent_strength_score":x.momentum_score,"rank":x.rank,"reasons":json.loads(x.reasons)} for x in res]
+
+
+    def _load_ai_analyses(self, db: Session, trade_date: str) -> dict[str, dict]:
+        try:
+            from app.models import NewsAnalysis
+        except Exception:
+            return {}
+        results: dict[str, dict] = {}
+        rows = db.query(NewsAnalysis).filter_by(analysis_date=trade_date).all()
+        for r in rows:
+            if r.stock_code == "MARKET":
+                continue
+            results[r.stock_code] = {
+                "ai_sentiment_score": r.ai_sentiment_score,
+                "ai_confidence": r.ai_confidence,
+                "ai_policy_boost": r.ai_policy_boost,
+                "ai_fundamental_boost": r.ai_fundamental_boost,
+                "ai_risk_flags": [],
+                "ai_reasons": json.loads(r.ai_reasons) if r.ai_reasons else [],
+            }
+        return results
+
+    def _load_market_adjustment(self, db: Session, trade_date: str) -> dict:
+        try:
+            from app.models import NewsAnalysis
+        except Exception:
+            return {}
+        mkt = db.query(NewsAnalysis).filter_by(stock_code="MARKET", analysis_date=trade_date).first()
+        if not mkt or not mkt.raw_analysis:
+            return {}
+        try:
+            data = json.loads(mkt.raw_analysis)
+            return data.get("adjustments", {})
+        except Exception:
+            return {}

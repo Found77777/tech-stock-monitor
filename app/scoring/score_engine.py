@@ -215,6 +215,21 @@ def compute_score(row: dict) -> dict:
     overheat = _safe(overheat)
 
     liquidity = _safe(row.get("liquidity_score", 0))
+    # --- AI Agent sentiment integration ---
+    ai_data = row.get("_ai_analysis", {})
+    ai_sentiment = _safe(ai_data.get("ai_sentiment_score", 50), 0, 100)
+    ai_confidence = _safe(ai_data.get("ai_confidence", 0), 0, 100)
+    ai_policy_boost = _safe(ai_data.get("ai_policy_boost", 0), -15, 15)
+    ai_fundamental_boost = _safe(ai_data.get("ai_fundamental_boost", 0), -10, 10)
+    market_adj = _safe(ai_data.get("market_sentiment_adj", 0), -10, 10)
+    tech_adj = _safe(ai_data.get("tech_sector_adj", 0), -10, 10)
+    policy = _safe(policy + ai_policy_boost)
+    fundamental = _safe(fundamental + ai_fundamental_boost)
+    ai_risk_flags = ai_data.get("ai_risk_flags", [])
+    ai_risk_penalty = min(len(ai_risk_flags) * 5, 15) if isinstance(ai_risk_flags, list) else 0.0
+    ai_reasons = ai_data.get("ai_reasons", [])
+    if isinstance(ai_reasons, list):
+        reasons.extend(ai_reasons)
     # fake rebound filter
     fake_rebound = (ma60_slope < -0.002 and ma120_slope < -0.001 and d20 < 0 and _safe(row.get("price_volume_resonance", 0), -1, 1) < 0)
     if fake_rebound:
@@ -222,9 +237,11 @@ def compute_score(row: dict) -> dict:
         trend = _safe(trend - 20)
         reasons.append("假反弹风险：MA60/MA120仍下行且股价未站上MA20，量价共振为负")
 
-    total = (0.14 * _safe(low_position) + 0.10 * _safe(fundamental) + 0.16 * _safe(policy) +
-             0.18 * _safe(cap) + 0.18 * _safe(trend) + 0.10 * _safe(liquidity) + 0.09 * _safe(recent_strength) -
-             _safe(concept_penalty) - _safe(overheat) - _safe(missing_penalty) + 0.15 * _safe(theme_eval.get("theme_relevance_score", 0)))
+    total = (0.12 * _safe(low_position) + 0.08 * _safe(fundamental) + 0.14 * _safe(policy) +
+             0.16 * _safe(cap) + 0.16 * _safe(trend) + 0.08 * _safe(liquidity) + 0.07 * _safe(recent_strength) +
+             0.12 * _safe(ai_sentiment) + market_adj + tech_adj -
+             _safe(concept_penalty) - _safe(overheat) - _safe(missing_penalty) - _safe(ai_risk_penalty) +
+             0.13 * _safe(theme_eval.get("theme_relevance_score", 0)))
     total = _safe(total)
 
     reasons.extend([
