@@ -140,3 +140,33 @@ def test_pure_downtrend_low_position_not_high():
         "distance_to_ma60": -0.18,
     })
     assert s["position_score"] < 40
+
+
+def test_fake_rebound_gets_penalized():
+    fake = compute_score({
+        "drawdown_from_120d_high": -0.2,
+        "drawdown_from_250d_high": -0.3,
+        "percentile_250d": 0.25,
+        "consolidation_days": 8,
+        "distance_to_ma20": -0.03,
+        "distance_to_ma60": -0.06,
+        "ma60_slope": -0.005,
+        "ma120_slope": -0.003,
+        "price_volume_resonance": -1,
+        "amount_ratio_5d": 1.2,
+        "volume_ratio_5d": 1.3,
+    })
+    good = compute_score({
+        "drawdown_from_120d_high": -0.2,
+        "drawdown_from_250d_high": -0.3,
+        "percentile_250d": 0.25,
+        "consolidation_days": 12,
+        "distance_to_ma20": 0.01,
+        "distance_to_ma60": 0.02,
+        "ma20_slope": 0.002,
+        "ma60_slope": 0.001,
+        "price_volume_resonance": 1,
+        "amount_ratio_5d": 1.4,
+        "volume_ratio_5d": 1.3,
+    })
+    assert good["total_score"] > fake["total_score"]

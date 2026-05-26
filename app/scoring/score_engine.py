@@ -147,6 +147,9 @@ def compute_score(row: dict) -> dict:
 
     r5 = _safe(row.get("stock_return_5d", 0), -10, 10)
     trend = _safe(row.get("trend_reversal_score", 40))
+    ma20_slope = _safe(row.get("ma20_slope", 0), -1, 1)
+    ma60_slope = _safe(row.get("ma60_slope", 0), -1, 1)
+    ma120_slope = _safe(row.get("ma120_slope", 0), -1, 1)
     if trend == 40:
         # fallback when factor not available
         trend = 40
@@ -161,6 +164,26 @@ def compute_score(row: dict) -> dict:
         if d20 > 0 and d60 > 0:
             trend += 10
     trend = _safe(trend)
+    if ma20_slope > 0:
+        trend += 8
+    if ma60_slope > 0:
+        trend += 8
+    if d20 > 0:
+        trend += 8
+    if row.get("ma20") is not None and row.get("ma60") is not None and row.get("ma20") > row.get("ma60"):
+        trend += 8
+    if _safe(row.get("amount_ratio_5d", 0), 0, 10) > 1.2 and _safe(row.get("volume_ratio_5d", 0), 0, 10) > 1.1:
+        trend += 6
+
+    if _safe(row.get("consolidation_days", 0), 0, 250) >= 10 and _safe(row.get("volatility_20d", 1), 0, 10) < 0.03 and _safe(row.get("price_volume_resonance", 0), -1, 1) > 0.5:
+        trend += 15
+        reasons.append("横盘突破：横盘充分且波动收敛后放量突破")
+    trend = _safe(trend)
+
+    # recent strength
+    r10 = _safe(row.get("stock_return_10d", 0), -10, 10)
+    rr = _safe(row.get("relative_return_vs_sector", row.get("excess_return_5d", 0)), -10, 10)
+    recent_strength = _safe(50 + r5 * 120 + r10 * 80 + rr * 120)
 
     cap, cap_reason = _capital_flow_score(row)
 
@@ -192,8 +215,15 @@ def compute_score(row: dict) -> dict:
     overheat = _safe(overheat)
 
     liquidity = _safe(row.get("liquidity_score", 0))
-    total = (0.20 * _safe(low_position) + 0.10 * _safe(fundamental) + 0.20 * _safe(policy) +
-             0.15 * _safe(cap) + 0.10 * _safe(trend) + 0.10 * _safe(liquidity) -
+    # fake rebound filter
+    fake_rebound = (ma60_slope < -0.002 and ma120_slope < -0.001 and d20 < 0 and _safe(row.get("price_volume_resonance", 0), -1, 1) < 0)
+    if fake_rebound:
+        overheat += 20
+        trend = _safe(trend - 20)
+        reasons.append("假反弹风险：MA60/MA120仍下行且股价未站上MA20，量价共振为负")
+
+    total = (0.14 * _safe(low_position) + 0.10 * _safe(fundamental) + 0.16 * _safe(policy) +
+             0.18 * _safe(cap) + 0.18 * _safe(trend) + 0.10 * _safe(liquidity) + 0.09 * _safe(recent_strength) -
              _safe(concept_penalty) - _safe(overheat) - _safe(missing_penalty) + 0.15 * _safe(theme_eval.get("theme_relevance_score", 0)))
     total = _safe(total)
 
@@ -203,7 +233,9 @@ def compute_score(row: dict) -> dict:
         f"主题相关性：theme_relevance_score={theme_eval.get('theme_relevance_score',0):.0f} 研发={theme_eval.get('research_strength_score',0):.0f} 创新={theme_eval.get('innovation_score',0):.0f} 产业地位={theme_eval.get('industry_position_score',0):.0f}",
         f"政策匹配：{theme if theme else '缺失'}（{policy:.0f}分） 纯度={theme_eval.get('purity_score',0):.0f}（惩罚{concept_penalty:.0f}）",
         f"资金/量能：{cap_reason}（capital_flow_score={cap:.0f}分）",
-        f"是否转强：trend_reversal_score={trend:.0f}，MA20距离={d20:.2%}，MA60距离={d60:.2%}",
+        f"趋势恢复：trend_reversal_score={trend:.0f}，MA20斜率={ma20_slope:.2%}，MA60斜率={ma60_slope:.2%}",
+        f"近期强度：recent_strength_score={recent_strength:.0f}（5日={r5:.2%}，10日={r10:.2%}，相对行业={rr:.2%}）",
+        "MA结构恢复：关注 MA20/MA60/MA120 方向一致性",
         f"风险提示：过热惩罚{overheat:.0f}",
         "主题标签静态风险：当前仍以规则与静态元数据为主，需结合财报/专利实证",
     ])
@@ -217,5 +249,6 @@ def compute_score(row: dict) -> dict:
         "liquidity_score": round(_safe(liquidity), 2),
         "position_score": round(_safe(low_position), 2),  # low_position_score
         "risk_penalty": round(_safe(concept_penalty + overheat), 2),
+        "recent_strength_score": round(_safe(recent_strength), 2),
         "reasons": reasons,
     }

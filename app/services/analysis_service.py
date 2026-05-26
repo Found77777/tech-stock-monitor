@@ -116,7 +116,20 @@ class AnalysisService:
         scored.sort(key=lambda x: x["total_score"], reverse=True)
         inserted = 0
         for i, s in enumerate(scored, start=1):
-            payload = {**s, "rank": i, "trade_date": td, "reasons": json.dumps(s["reasons"], ensure_ascii=False)}
+            payload = {
+                "code": s["code"],
+                "name": s["name"],
+                "total_score": s.get("total_score"),
+                "trend_score": s.get("trend_score"),
+                "momentum_score": s.get("momentum_score"),
+                "relative_strength_score": s.get("relative_strength_score"),
+                "liquidity_score": s.get("liquidity_score"),
+                "position_score": s.get("position_score"),
+                "risk_penalty": s.get("risk_penalty"),
+                "rank": i,
+                "trade_date": td,
+                "reasons": json.dumps(s["reasons"], ensure_ascii=False),
+            }
             payload["name"] = str(payload.get("name") or payload.get("code"))
             for k in ["total_score","trend_score","momentum_score","relative_strength_score","liquidity_score","position_score","risk_penalty"]:
                 payload[k] = self._safe_db_score(payload.get(k))
@@ -132,4 +145,4 @@ class AnalysisService:
         if not td:
             return []
         res = db.query(StockScore).filter_by(trade_date=td).order_by(desc(StockScore.total_score)).all()
-        return [{"code":x.code,"name":x.name,"total_score":x.total_score,"trend_score":x.trend_score,"momentum_score":x.momentum_score,"relative_strength_score":x.relative_strength_score,"liquidity_score":x.liquidity_score,"position_score":x.position_score,"risk_penalty":x.risk_penalty,"rank":x.rank,"reasons":json.loads(x.reasons)} for x in res]
+        return [{"code":x.code,"name":x.name,"total_score":x.total_score,"trend_score":x.trend_score,"momentum_score":x.momentum_score,"relative_strength_score":x.relative_strength_score,"liquidity_score":x.liquidity_score,"position_score":x.position_score,"risk_penalty":x.risk_penalty,"recent_strength_score":x.momentum_score,"rank":x.rank,"reasons":json.loads(x.reasons)} for x in res]

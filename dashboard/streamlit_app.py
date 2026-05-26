@@ -275,6 +275,9 @@ def main():
             "consolidation_days",
             "ma_structure_score",
             "position_score",  # low_position_score mapping
+            "recent_strength_score",
+            "ma20_slope",
+            "ma60_slope",
             "net_inflow_5d",
             "amount_ratio_5d",
             "trend_score",

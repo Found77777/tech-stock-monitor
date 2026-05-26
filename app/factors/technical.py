@@ -12,6 +12,9 @@ def add_technical_factors(df: pd.DataFrame) -> pd.DataFrame:
     d["ma120_prev"] = d["ma120"].shift(1)
     d["distance_to_ma20"] = (d["close"] - d["ma20"]) / d["ma20"]
     d["distance_to_ma60"] = (d["close"] - d["ma60"]) / d["ma60"]
+    d["ma20_slope"] = (d["ma20"] - d["ma20_prev"]) / d["ma20_prev"].replace(0, pd.NA)
+    d["ma60_slope"] = (d["ma60"] - d["ma60_prev"]) / d["ma60_prev"].replace(0, pd.NA)
+    d["ma120_slope"] = (d["ma120"] - d["ma120_prev"]) / d["ma120_prev"].replace(0, pd.NA)
     d["new_20d_high"] = d["close"] >= d["close"].rolling(20).max()
     d["drawdown_from_120d_high"] = d["close"] / d["close"].rolling(120).max() - 1
     d["drawdown_from_250d_high"] = d["close"] / d["close"].rolling(250).max() - 1
