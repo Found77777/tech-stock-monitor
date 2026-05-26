@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 import pandas as pd
 import requests
@@ -70,6 +71,17 @@ class SinaDataSource(BaseDataSource):
             rows.append({"code": code,"name": name,"price": round(price, 3) if price else 0.0,"pct_change": round(pct_change, 3) if prev_close else 0.0,"change": round(change, 3) if prev_close else 0.0,"volume": volume,"amount": amount,"turnover_rate": None,"pe": None,"pb": None,"total_market_cap": None,"float_market_cap": None,"timestamp": now})
         return pd.DataFrame(rows)
 
+    @staticmethod
+    def _to_float(v: Any) -> float | None:
+        if v is None:
+            return None
+        if isinstance(v, (dict, list, tuple)):
+            return None
+        try:
+            return float(v)
+        except Exception:
+            return None
+
     def fetch_daily_bars(self, code: str, start_date: str, end_date: str) -> pd.DataFrame:
         """Fetch daily bars from Tencent-compatible kline API (non-EastMoney)."""
         symbol = self._to_sina_symbol(code)
@@ -78,19 +90,29 @@ class SinaDataSource(BaseDataSource):
         resp.raise_for_status()
         payload = resp.json()
         node = payload.get("data", {}).get(symbol, {})
-        day = node.get("qfqday") or node.get("day") or []
-        if not day:
+
+        # only expand actual kline arrays; ignore metadata dicts
+        day = node.get("qfqday") or node.get("day") or node.get("hfqday") or []
+        if not isinstance(day, list) or not day:
             return pd.DataFrame(columns=["code", "name", "trade_date", "open", "high", "low", "close", "volume", "amount", "pct_change", "turnover_rate"])
+
         rows = []
+        prev_close = None
         for item in day:
-            # [date, open, close, high, low, volume, ...]
+            if not isinstance(item, (list, tuple)) or len(item) < 6:
+                continue
             d = str(item[0])
             if d < start_date or d > end_date:
                 continue
-            o, c, h, l = map(float, item[1:5])
-            v = float(item[5]) if len(item) > 5 else 0.0
-            amt = float(item[6]) if len(item) > 6 else None
-            rows.append({"code": str(code), "name": str(code), "trade_date": d, "open": o, "high": h, "low": l, "close": c, "volume": v, "amount": amt, "pct_change": None, "turnover_rate": None})
+            o = self._to_float(item[1])
+            c = self._to_float(item[2])
+            h = self._to_float(item[3])
+            l = self._to_float(item[4])
+            v = self._to_float(item[5])
+            amt = self._to_float(item[6]) if len(item) > 6 else None
+            pct_change = ((c - prev_close) / prev_close * 100) if (prev_close not in (None, 0) and c is not None) else None
+            rows.append({"code": str(code), "name": None, "trade_date": d, "open": o, "high": h, "low": l, "close": c, "volume": v, "amount": amt, "pct_change": pct_change, "turnover_rate": None})
+            prev_close = c
         return pd.DataFrame(rows)
 
     def get_basic_info(self, symbols: list[str]) -> list[dict[str, str]]:

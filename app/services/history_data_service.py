@@ -36,6 +36,12 @@ class HistoryDataService:
             return AKShareDataSource(), "akshare"
         return AKShareDataSource(), "akshare"
 
+    def _row_has_nested(self, row: dict) -> bool:
+        for v in row.values():
+            if isinstance(v, (dict, list, tuple)):
+                return True
+        return False
+
     def refresh(self, db: Session, days: int = 120) -> dict:
         source, source_name = self._resolve_source()
         logger.info("HistoryDataService using source=%s", source_name)
@@ -55,6 +61,9 @@ class HistoryDataService:
                 logger.warning("history bars empty code=%s source=%s", code, source_name)
                 continue
             for row in bars.tail(days).to_dict(orient="records"):
+                if self._row_has_nested(row):
+                    logger.warning("history row nested skipped code=%s source=%s row=%s", code, source_name, row)
+                    continue
                 exists = db.query(DailyBar).filter_by(code=row["code"], trade_date=str(row["trade_date"])).first()
                 if exists:
                     continue

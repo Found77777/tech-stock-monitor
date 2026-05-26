@@ -27,3 +27,9 @@ def test_history_source_selects_sina_from_env():
     source, name = svc._resolve_source()
     assert name == 'sina'
     assert isinstance(source, SinaDataSource)
+
+
+def test_history_row_nested_guard():
+    svc = HistoryDataService(source=object())
+    assert svc._row_has_nested({"a": 1, "b": "x"}) is False
+    assert svc._row_has_nested({"a": {"x": 1}}) is True
