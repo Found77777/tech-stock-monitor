@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends
@@ -15,6 +16,12 @@ from app.database import get_db
 from app.models import DailyBar, NewsAnalysis
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+def _norm_code(code: str) -> str:
+    c = "".join(ch for ch in str(code or "") if ch.isdigit())
+    return c[-6:].zfill(6) if c else ""
 
 
 class AnalyzeRequest(BaseModel):
@@ -25,20 +32,61 @@ class AnalyzeRequest(BaseModel):
 @router.post("/analyze")
 async def analyze_news(req: AnalyzeRequest, db: Session = Depends(get_db)):
     agent = NewsAgent(get_settings())
-    codes = req.stock_codes or [r[0] for r in db.query(DailyBar.code).group_by(DailyBar.code).all()]
+    raw_codes = req.stock_codes or [r[0] for r in db.query(DailyBar.code).group_by(DailyBar.code).all()]
+    codes = [_norm_code(c) for c in raw_codes if _norm_code(c)]
+    logger.info("agent analyze requested stock_codes=%s", codes)
     results = {"stock_analyses": [], "market_overview": None}
     if codes:
         analyses = await agent.analyze_stocks(codes)
+        fetched_counts: dict[str, int] = {code: 0 for code in codes}
+        by_code = {}
         for a in analyses:
-            scored = score_from_analysis(a)
+            c = _norm_code(a.get("stock_code", ""))
+            if c:
+                by_code[c] = a
+                fetched_counts[c] = fetched_counts.get(c, 0) + 1
+        logger.info("agent fetched news count per stock=%s", fetched_counts)
+        logger.info("agent fetched/parsed analysis count=%s", len(by_code))
+
+        for code in codes:
+            a = by_code.get(code)
+            is_fallback = False
+            if not a:
+                is_fallback = True
+                a = {
+                    "stock_code": code,
+                    "policy_sentiment": 0,
+                    "fundamental_event_score": 0,
+                    "industry_momentum": 0,
+                    "market_buzz_score": 0,
+                    "market_buzz_direction": 0,
+                    "macro_impact": 0,
+                    "composite_sentiment": 0,
+                    "confidence": 0,
+                    "risk_flags": ["未抓取到有效新闻，暂不调整评分"],
+                    "key_events": [],
+                    "summary": "未抓取到有效新闻，暂不调整评分",
+                }
+            if is_fallback:
+                scored = {
+                    "ai_sentiment_score": 0.0,
+                    "ai_confidence": 0.0,
+                    "ai_policy_boost": 0.0,
+                    "ai_fundamental_boost": 0.0,
+                    "ai_risk_flags": ["未抓取到有效新闻，暂不调整评分"],
+                    "ai_reasons": ["未抓取到有效新闻，暂不调整评分"],
+                }
+            else:
+                scored = score_from_analysis(a)
             rec = {
-                "stock_code": a.get("stock_code", ""), "analysis_date": datetime.now().strftime("%Y-%m-%d"),
+                "stock_code": code, "analysis_date": datetime.now().strftime("%Y-%m-%d"),
                 "raw_analysis": json.dumps(a, ensure_ascii=False), "ai_sentiment_score": scored["ai_sentiment_score"],
                 "ai_confidence": scored["ai_confidence"], "ai_policy_boost": scored["ai_policy_boost"],
                 "ai_fundamental_boost": scored["ai_fundamental_boost"], "ai_reasons": json.dumps(scored["ai_reasons"], ensure_ascii=False),
             }
             _upsert_news_analysis(db, rec)
             results["stock_analyses"].append(rec)
+        logger.info("agent generated stock analysis count=%s", len(results["stock_analyses"]))
     if req.include_market_overview:
         overview = await agent.market_overview()
         adj = merge_market_overview(overview)
