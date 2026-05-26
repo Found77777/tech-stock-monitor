@@ -10,9 +10,10 @@ from sqlalchemy.orm import Session
 from app.factors.liquidity import add_liquidity_factors
 from app.factors.relative_strength import add_relative_strength_factors
 from app.factors.technical import add_technical_factors
-from app.models import DailyBar, StockScore, StockSignal
+from app.models import DailyBar, StockScore, StockSignal, StockSnapshot
 from app.scoring.score_engine import compute_score
 from app.signals.signal_engine import generate_signals
+from app.universe.tech_universe import load_tech_universe_df
 
 
 class AnalysisService:
@@ -45,6 +46,38 @@ class AnalysisService:
             rows.append(d.iloc[-1].to_dict())
         return rows
 
+    def _universe_name_map(self) -> dict[str, str]:
+        try:
+            df = load_tech_universe_df()
+            return {
+                str(r["code"]): str(r["name"])
+                for r in df[["code", "name"]].to_dict(orient="records")
+                if str(r.get("code", "")).strip() and str(r.get("name", "")).strip()
+            }
+        except Exception:
+            return {}
+
+    def _resolve_name(self, db: Session, code: str, row_name: str | None, universe_name_map: dict[str, str]) -> str:
+        code = str(code)
+        candidate = str(row_name).strip() if row_name is not None else ""
+        if candidate and candidate != code:
+            return candidate
+
+        latest_snapshot_name = (
+            db.query(StockSnapshot.name)
+            .filter(StockSnapshot.code == code)
+            .order_by(desc(StockSnapshot.timestamp))
+            .first()
+        )
+        if latest_snapshot_name and str(latest_snapshot_name[0]).strip():
+            return str(latest_snapshot_name[0]).strip()
+
+        universe_name = universe_name_map.get(code, "")
+        if str(universe_name).strip():
+            return str(universe_name).strip()
+
+        return code
+
     def generate_signals(self, db: Session) -> dict:
         rows = self._latest_rows(db)
         trade_date = datetime.now().strftime("%Y-%m-%d")
@@ -68,14 +101,18 @@ class AnalysisService:
     def generate_scores(self, db: Session) -> dict:
         rows = self._latest_rows(db)
         td = datetime.now().strftime("%Y-%m-%d")
+        universe_name_map = self._universe_name_map()
         scored = []
         for r in rows:
             s = compute_score(r)
-            scored.append({"code":r["code"],"name":r["name"],**s})
+            code = str(r["code"])
+            resolved_name = self._resolve_name(db, code, r.get("name"), universe_name_map)
+            scored.append({"code": code, "name": resolved_name, **s})
         scored.sort(key=lambda x: x["total_score"], reverse=True)
         inserted = 0
         for i, s in enumerate(scored, start=1):
             payload = {**s, "rank": i, "trade_date": td, "reasons": json.dumps(s["reasons"], ensure_ascii=False)}
+            payload["name"] = str(payload.get("name") or payload.get("code"))
             for k in ["total_score","trend_score","momentum_score","relative_strength_score","liquidity_score","position_score","risk_penalty"]:
                 payload[k] = self._safe_db_score(payload.get(k))
             if db.query(StockScore).filter_by(code=s["code"], trade_date=td).first():

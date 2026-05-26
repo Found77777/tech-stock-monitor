@@ -1,50 +1,314 @@
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+
 import pandas as pd
 import requests
 import streamlit as st
-import altair as alt
-from app.config import get_settings
 
-def fetch(url, method='get'):
+from app.config import get_settings
+from app.universe.tech_universe import load_tech_universe_df
+
+
+STATUS_COLOR = {
+    "重点观察": "🟢",
+    "普通观察": "🟡",
+    "高风险": "🔴",
+}
+
+
+def fetch(url: str, method: str = "get"):
     try:
-        r=requests.request(method,url,timeout=90); r.raise_for_status(); return r.json(),None
-    except Exception as e:
-        return None,str(e)
+        resp = requests.request(method, url, timeout=120)
+        resp.raise_for_status()
+        return resp.json(), None
+    except Exception as exc:
+        return None, str(exc)
+
+
+def _to_df(obj) -> pd.DataFrame:
+    if obj is None:
+        return pd.DataFrame()
+    if isinstance(obj, list):
+        return pd.DataFrame(obj)
+    if isinstance(obj, dict):
+        return pd.DataFrame([obj])
+    return pd.DataFrame()
+
+
+def normalize_records(payload) -> list[dict]:
+    if payload is None:
+        return []
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        for key in ("data", "items", "results", "snapshots", "scores"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return value
+        return [payload]
+    return []
+
+
+def _format_reasons(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return "；".join(str(x) for x in value)
+    if isinstance(value, dict):
+        return "；".join(f"{k}: {v}" for k, v in value.items())
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, list):
+                return "；".join(str(x) for x in parsed)
+            if isinstance(parsed, dict):
+                return "；".join(f"{k}: {v}" for k, v in parsed.items())
+        except Exception:
+            return value
+        return value
+    return str(value)
+
+
+def _df_from_payload(payload) -> pd.DataFrame:
+    records = normalize_records(payload)
+    if not records:
+        return pd.DataFrame()
+    df = pd.DataFrame(records)
+    if "reasons" in df.columns:
+        df["reasons"] = df["reasons"].map(_format_reasons)
+    if "reason" in df.columns:
+        df["reason"] = df["reason"].map(_format_reasons)
+    return df
+
+
+def _watch_flag(total_score: float, risk_penalty: float) -> str:
+    if risk_penalty >= 20:
+        return f"{STATUS_COLOR['高风险']} 高风险"
+    if total_score >= 75:
+        return f"{STATUS_COLOR['重点观察']} 重点观察"
+    if total_score >= 60:
+        return f"{STATUS_COLOR['普通观察']} 普通观察"
+    return "⚪ 观察"
+
 
 def main():
-    s=get_settings(); base=f"http://{s.app_host}:{s.app_port}"
-    st.title('A股科技监控平台（Phase 4）')
-    mode = 'MOCK' if s.use_mock_data else 'REAL'
-    st.info(f'数据模式: {mode}')
-    if s.use_mock_data:
-        st.warning('当前为演示数据，不可用于投资判断')
-    tabs=st.tabs(['市场快照','观察池Top20','信号列表','回测与因子验证'])
-    with tabs[0]:
-        d,e=fetch(f"{base}/market/snapshot"); st.error(e) if e else st.dataframe(pd.DataFrame(d))
-    with tabs[1]:
-        d,e=fetch(f"{base}/watchlist/top?limit=20"); st.error(e) if e else st.dataframe(pd.DataFrame(d))
-    with tabs[2]:
-        d,e=fetch(f"{base}/signals/latest"); st.error(e) if e else st.dataframe(pd.DataFrame(d))
-    with tabs[3]:
-        c1,c2,c3,c4=st.columns(4)
-        if c1.button('因子IC'): fetch(f"{base}/backtest/factor-ic",'post')
-        if c2.button('分组收益'): fetch(f"{base}/backtest/factor-groups",'post')
-        if c3.button('信号研究'): fetch(f"{base}/backtest/signals",'post')
-        if c4.button('TopScore回测'): fetch(f"{base}/backtest/top-score",'post')
-        res,e=fetch(f"{base}/backtest/results/latest")
-        if e: st.error(e)
-        else:
-            st.json(res)
-            for r in res:
-                if r['test_type']=='factor_ic':
-                    one=next(iter(r['payload'].values())) if r['payload'] else {}
-                    sers=one.get('daily_ic_series',[])
-                    if sers:
-                        df=pd.DataFrame(sers)
-                        st.altair_chart(alt.Chart(df).mark_line().encode(x='trade_date:T',y='ic:Q'),use_container_width=True)
-                if r['test_type']=='top_score':
-                    nav=pd.DataFrame(r['payload'].get('nav_curve',[]))
-                    if not nav.empty:
-                        st.altair_chart(alt.Chart(nav).mark_line().encode(x='trade_date:T',y='nav:Q'),use_container_width=True)
-                        st.dataframe(pd.DataFrame([r['payload'].get('metrics',{})]))
+    s = get_settings()
+    base = f"http://{s.app_host}:{s.app_port}"
 
-if __name__=='__main__': main()
+    st.set_page_config(page_title="主板科技低位转强监控器", layout="wide")
+    st.title("主板科技低位转强监控器")
+
+    mode = "MOCK" if s.use_mock_data else "REAL"
+    st.caption(f"数据模式: **{mode}** | REAL_DATA_SOURCE: **{s.data_source_provider}**")
+    if s.use_mock_data:
+        st.warning("当前为演示数据，不可用于投资判断")
+
+    # --- operations ---
+    st.subheader("操作区")
+    c1, c2, c3, c4, c5 = st.columns(5)
+
+    refresh_result = {}
+    if c1.button("刷新实时行情", use_container_width=True):
+        d, e = fetch(f"{base}/market/refresh", method="post")
+        refresh_result["market"] = (d, e)
+    if c2.button("刷新历史K线", use_container_width=True):
+        d, e = fetch(f"{base}/history/refresh?days=120", method="post")
+        refresh_result["history"] = (d, e)
+    if c3.button("生成信号", use_container_width=True):
+        d, e = fetch(f"{base}/signals/generate", method="post")
+        refresh_result["signals"] = (d, e)
+    if c4.button("生成评分", use_container_width=True):
+        d, e = fetch(f"{base}/scores/generate", method="post")
+        refresh_result["scores"] = (d, e)
+    if c5.button("一键完整刷新", use_container_width=True):
+        d1, e1 = fetch(f"{base}/market/refresh", method="post")
+        d2, e2 = fetch(f"{base}/history/refresh?days=120", method="post")
+        d3, e3 = fetch(f"{base}/signals/generate", method="post")
+        d4, e4 = fetch(f"{base}/scores/generate", method="post")
+        refresh_result = {
+            "market": (d1, e1),
+            "history": (d2, e2),
+            "signals": (d3, e3),
+            "scores": (d4, e4),
+        }
+
+    for key, (data, err) in refresh_result.items():
+        if err:
+            st.error(f"{key}: {err}")
+        else:
+            st.success(f"{key}: {data}")
+
+    # --- fetch current datasets for dashboard ---
+    snapshot_json, snapshot_err = fetch(f"{base}/market/snapshot")
+    watch_json, watch_err = fetch(f"{base}/watchlist/top?limit=200")
+    signals_json, signals_err = fetch(f"{base}/signals/latest")
+
+    snapshot_df = _df_from_payload(snapshot_json)
+    watch_df = _df_from_payload(watch_json)
+    signals_df = _df_from_payload(signals_json)
+
+    scores_json, scores_err = fetch(f"{base}/scores/latest")
+    movers_json, movers_err = fetch(f"{base}/market/top-movers?limit=20")
+    backtest_json, backtest_err = fetch(f"{base}/backtest/results/latest")
+    scores_df = _df_from_payload(scores_json)
+    movers_df = _df_from_payload(movers_json)
+    backtest_df = _df_from_payload(backtest_json)
+
+    universe_df = load_tech_universe_df()
+    universe_count = len(universe_df)
+
+    # enrich watchlist with universe metadata for filters/details
+    if not watch_df.empty:
+        watch_df["code"] = watch_df["code"].astype(str)
+        watch_df["reasons_text"] = watch_df.get("reasons", "").map(_format_reasons)
+        watch_df = watch_df.merge(
+            universe_df[["code", "sector", "policy_theme", "concept_purity", "fundamental_quality"]],
+            on="code",
+            how="left",
+        )
+        watch_df["status"] = watch_df.apply(
+            lambda r: _watch_flag(float(r.get("total_score", 0) or 0), float(r.get("risk_penalty", 0) or 0)),
+            axis=1,
+        )
+
+    # --- top status bar ---
+    st.subheader("顶部状态")
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("数据源", s.data_source_provider.upper())
+    m2.metric("最近刷新时间", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"))
+    m3.metric("股票池数量", universe_count)
+    m4.metric("实时行情数量", len(snapshot_df))
+    m5.metric("历史K线数量", "见 /history/refresh 返回")
+
+    if snapshot_err:
+        st.error(f"market/snapshot 读取失败: {snapshot_err}")
+    if watch_err:
+        st.error(f"watchlist/top 读取失败: {watch_err}")
+    if signals_err:
+        st.error(f"signals/latest 读取失败: {signals_err}")
+    if scores_err:
+        st.error(f"scores/latest 读取失败: {scores_err}")
+    if movers_err:
+        st.error(f"market/top-movers 读取失败: {movers_err}")
+    if backtest_err:
+        st.error(f"backtest/results/latest 读取失败: {backtest_err}")
+
+    with st.expander("辅助表格（统一 normalize_records 渲染）", expanded=False):
+        st.markdown("**Market Snapshot**")
+        st.dataframe(pd.DataFrame(normalize_records(snapshot_json)), use_container_width=True)
+        st.markdown("**Top Movers**")
+        st.dataframe(pd.DataFrame(normalize_records(movers_json)), use_container_width=True)
+        st.markdown("**Signals**")
+        st.dataframe(pd.DataFrame(normalize_records(signals_json)), use_container_width=True)
+        st.markdown("**Scores**")
+        st.dataframe(pd.DataFrame(normalize_records(scores_json)), use_container_width=True)
+        st.markdown("**Watchlist**")
+        st.dataframe(pd.DataFrame(normalize_records(watch_json)), use_container_width=True)
+        st.markdown("**Backtest Results**")
+        st.dataframe(pd.DataFrame(normalize_records(backtest_json)), use_container_width=True)
+
+    st.divider()
+    st.subheader("Top Watchlist")
+
+    if watch_df.empty:
+        st.info("暂无评分数据，请先点击“生成评分”或“一键完整刷新”。")
+    else:
+        # filters
+        f1, f2, f3, f4, f5 = st.columns(5)
+        sector_options = ["全部"] + sorted([x for x in watch_df["sector"].dropna().unique().tolist()])
+        policy_options = ["全部"] + sorted([x for x in watch_df["policy_theme"].dropna().unique().tolist()])
+        concept_options = ["全部"] + sorted([x for x in watch_df["concept_purity"].dropna().unique().tolist()])
+
+        sector_sel = f1.selectbox("sector", sector_options, index=0)
+        policy_sel = f2.selectbox("policy_theme", policy_options, index=0)
+        concept_sel = f3.selectbox("concept_purity", concept_options, index=0)
+        min_score = f4.slider("minimum total_score", min_value=0.0, max_value=100.0, value=60.0, step=1.0)
+        max_risk = f5.slider("排除 risk_penalty 过高", min_value=0.0, max_value=100.0, value=30.0, step=1.0)
+
+        filtered = watch_df.copy()
+        if sector_sel != "全部":
+            filtered = filtered[filtered["sector"] == sector_sel]
+        if policy_sel != "全部":
+            filtered = filtered[filtered["policy_theme"] == policy_sel]
+        if concept_sel != "全部":
+            filtered = filtered[filtered["concept_purity"] == concept_sel]
+        filtered = filtered[(filtered["total_score"] >= min_score) & (filtered["risk_penalty"] <= max_risk)]
+
+        show_cols = [
+            "status",
+            "rank",
+            "code",
+            "name",
+            "total_score",
+            "position_score",  # low_position_score mapping
+            "fundamental_quality",
+            "policy_theme",
+            "momentum_score",  # capital_inflow_score mapping
+            "liquidity_score",
+            "risk_penalty",
+            "reasons_text",
+        ]
+        rename_map = {
+            "position_score": "low_position_score",
+            "momentum_score": "capital_inflow_score",
+            "fundamental_quality": "fundamental_score",
+            "reasons_text": "reasons",
+        }
+
+        display_df = filtered[[c for c in show_cols if c in filtered.columns]].rename(columns=rename_map)
+        st.dataframe(display_df, use_container_width=True, height=420)
+
+        st.subheader("个股详情")
+        codes = display_df["code"].astype(str).tolist()
+        selected_code = st.selectbox("选择股票", options=codes)
+        selected = filtered[filtered["code"].astype(str) == str(selected_code)]
+        if not selected.empty:
+            row = selected.iloc[0]
+            d1, d2 = st.columns([1, 1])
+            with d1:
+                st.markdown(f"**{row.get('name','')} ({row.get('code','')})**")
+                st.write("评分拆解")
+                st.json(
+                    {
+                        "total_score": row.get("total_score"),
+                        "trend_reversal_score": row.get("trend_score"),
+                        "capital_inflow_score": row.get("momentum_score"),
+                        "policy_alignment_score": row.get("relative_strength_score"),
+                        "liquidity_score": row.get("liquidity_score"),
+                        "low_position_score": row.get("position_score"),
+                        "risk_penalty": row.get("risk_penalty"),
+                    }
+                )
+                st.write("reasons")
+                st.write(_format_reasons(row.get("reasons")))
+
+                pos = float(row.get("position_score", 0) or 0)
+                if pos >= 70:
+                    st.info("近120日位置说明：处于相对低位并出现修复特征。")
+                elif pos >= 40:
+                    st.info("近120日位置说明：中位区域，仍需确认趋势延续。")
+                else:
+                    st.warning("近120日位置说明：位置优势不明显或历史区间不足。")
+
+            with d2:
+                sig = signals_df[signals_df["code"].astype(str) == str(selected_code)] if not signals_df.empty else pd.DataFrame()
+                st.write("最近信号")
+                if sig.empty:
+                    st.caption("暂无信号")
+                else:
+                    sig = sig.copy()
+                    sig["reason"] = sig["reason"].map(_format_reasons)
+                    st.dataframe(sig[[c for c in ["signal_name", "signal_type", "strength", "reason", "generated_at"] if c in sig.columns]], use_container_width=True)
+
+                px = snapshot_df[snapshot_df["code"].astype(str) == str(selected_code)] if not snapshot_df.empty else pd.DataFrame()
+                st.write("最近价格")
+                if px.empty:
+                    st.caption("暂无实时行情")
+                else:
+                    st.dataframe(px[[c for c in ["code", "name", "price", "pct_change", "amount", "timestamp"] if c in px.columns]], use_container_width=True)
+
+
+if __name__ == "__main__":
+    main()
