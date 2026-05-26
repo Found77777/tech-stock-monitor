@@ -34,6 +34,7 @@ class AnalysisService:
 
     def _latest_rows(self, db: Session) -> list[dict]:
         codes = [x[0] for x in db.query(DailyBar.code).group_by(DailyBar.code).all()]
+        u_df = load_tech_universe_df().set_index("code")
         rows = []
         for code in codes:
             bars = db.query(DailyBar).filter_by(code=code).order_by(DailyBar.trade_date.asc()).all()
@@ -43,7 +44,11 @@ class AnalysisService:
             d = add_technical_factors(d)
             d = add_liquidity_factors(d)
             d = add_relative_strength_factors(d)
-            rows.append(d.iloc[-1].to_dict())
+            row = d.iloc[-1].to_dict()
+            if str(code) in u_df.index:
+                for k, v in u_df.loc[str(code)].to_dict().items():
+                    row[k] = v
+            rows.append(row)
         return rows
 
     def _universe_name_map(self) -> dict[str, str]:

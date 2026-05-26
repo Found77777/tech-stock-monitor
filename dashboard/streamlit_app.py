@@ -270,9 +270,14 @@ def main():
             "code",
             "name",
             "total_score",
+            "percentile_250d",
+            "consolidation_days",
+            "ma_structure_score",
             "position_score",  # low_position_score mapping
+            "net_inflow_5d",
+            "amount_ratio_5d",
             "trend_score",
-            "momentum_score",
+            "momentum_score",  # capital_flow_score mapping
             "relative_strength_score",
             "liquidity_score",
             "risk_penalty",
@@ -280,6 +285,7 @@ def main():
         ]
         rename_map = {
             "position_score": "low_position_score",
+            "momentum_score": "capital_flow_score",
             "reasons_text": "reasons",
         }
 

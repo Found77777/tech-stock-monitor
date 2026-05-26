@@ -1,6 +1,6 @@
 from app import models  # noqa: F401
 from app.database import Base, SessionLocal, engine
-from app.models import DailyBar
+from app.models import DailyBar, StockScore
 from app.services.analysis_service import AnalysisService
 
 
@@ -9,6 +9,9 @@ def test_score_row_missing_name_filled_from_universe_or_code():
     db = SessionLocal()
     try:
         code = "600100"
+        db.query(StockScore).filter(StockScore.code == code).delete(synchronize_session=False)
+        db.query(DailyBar).filter(DailyBar.code == code).delete(synchronize_session=False)
+        db.commit()
         # name deliberately equals code (treated as missing semantic name)
         for i in range(1, 40):
             db.add(
