@@ -53,7 +53,7 @@ def _capital_flow_score(row: dict) -> tuple[float, str]:
     d20 = _safe(row.get("distance_to_ma20"), -10, 10)
     d60 = _safe(row.get("distance_to_ma60"), -10, 10)
 
-    score = 40.0
+    score = 30.0
     if n10 > 0:
         score += 25
     elif n5 > 0:
@@ -63,7 +63,9 @@ def _capital_flow_score(row: dict) -> tuple[float, str]:
     else:
         score -= 10
 
-    if 1.1 <= ar5 <= 2.5:
+    if ar5 == 0:
+        score -= 10
+    elif 1.1 <= ar5 <= 2.5:
         score += 15
     elif ar5 < 1:
         score -= 5
@@ -83,10 +85,12 @@ def _capital_flow_score(row: dict) -> tuple[float, str]:
         score -= 12
 
     # volume-price structure
-    if d60 > 0 and vr5 > 1.2:
+    if d60 > 0 and vr5 > 1.2 and pvr >= 0.5:
         score += 10  # 放量突破MA60
     if d20 < 0 and vr5 > 1.2:
         score -= 12  # 放量跌破MA20
+    if pvr < -0.5 and vr5 > 1.1:
+        score -= 10  # 放量下跌额外扣分
 
     reason = f"主力净流入(1/5/10日)={n1:.0f}/{n5:.0f}/{n10:.0f}，量比5日={ar5:.2f}，量能比5日={vr5:.2f}，量价共振={pvr:.2f}"
     return _safe(score), reason
@@ -99,6 +103,8 @@ def compute_score(row: dict) -> dict:
     pct250 = _safe(row.get("percentile_250d", None), 0, 1)
     cons_days = _safe(row.get("consolidation_days", None), 0, 250)
     ma_struct = _safe(row.get("ma_structure_score", None), 0, 100)
+    d20 = _safe(row.get("distance_to_ma20", 0), -10, 10)
+    d60 = _safe(row.get("distance_to_ma60", 0), -10, 10)
 
     low_position = 35.0
     # 回撤但不崩坏
@@ -129,14 +135,16 @@ def compute_score(row: dict) -> dict:
     # MA120不崩坏
     if dd120 < -0.45:
         low_position -= 12
+    # 纯下跌/破位过滤
+    if d20 < -0.08 and d60 < -0.12:
+        low_position -= 25
+        reasons.append("低位风险：均线下方深度运行，疑似纯下跌趋势")
 
     low_position = _safe(low_position)
     reasons.append(
         f"低位状态：250日回撤={dd250:.2%}，250日分位={pct250:.1%}，横盘{int(cons_days)}天，MA结构={ma_struct:.0f}"
     )
 
-    d20 = _safe(row.get("distance_to_ma20", 0), -10, 10)
-    d60 = _safe(row.get("distance_to_ma60", 0), -10, 10)
     r5 = _safe(row.get("stock_return_5d", 0), -10, 10)
     trend = _safe(row.get("trend_reversal_score", 40))
     if trend == 40:
@@ -156,11 +164,22 @@ def compute_score(row: dict) -> dict:
 
     cap, cap_reason = _capital_flow_score(row)
 
-    fundamental = _fundamental_score(row.get("fundamental_quality"))
+    fq = row.get("fundamental_quality")
+    fundamental = _fundamental_score(fq)
     theme_eval = evaluate_theme(row)
     theme = theme_eval.get("primary_theme") or row.get("policy_theme") or row.get("theme")
     policy = _safe(theme_eval.get("policy_alignment_score", _policy_score(theme)))
     concept_penalty = _safe(max(0.0, 100 - theme_eval.get("purity_score", 50)) / 4)
+    missing_penalty = 0.0
+    if not fq:
+        missing_penalty += 6
+        reasons.append("数据缺失风险：fundamental_quality 缺失")
+    if not row.get("policy_theme") and not row.get("theme"):
+        missing_penalty += 4
+        reasons.append("数据缺失风险：policy/theme 标签缺失")
+    if row.get("amount_ratio_5d") is None:
+        missing_penalty += 5
+        reasons.append("资金流 proxy 风险：amount_ratio_5d 缺失")
 
     overheat = 0
     r20 = _safe(row.get("stock_return_20d", 0), -10, 10)
@@ -175,7 +194,7 @@ def compute_score(row: dict) -> dict:
     liquidity = _safe(row.get("liquidity_score", 0))
     total = (0.20 * _safe(low_position) + 0.10 * _safe(fundamental) + 0.20 * _safe(policy) +
              0.15 * _safe(cap) + 0.10 * _safe(trend) + 0.10 * _safe(liquidity) -
-             _safe(concept_penalty) - _safe(overheat) + 0.15 * _safe(theme_eval.get("theme_relevance_score", 0)))
+             _safe(concept_penalty) - _safe(overheat) - _safe(missing_penalty) + 0.15 * _safe(theme_eval.get("theme_relevance_score", 0)))
     total = _safe(total)
 
     reasons.extend([
@@ -186,6 +205,7 @@ def compute_score(row: dict) -> dict:
         f"资金/量能：{cap_reason}（capital_flow_score={cap:.0f}分）",
         f"是否转强：trend_reversal_score={trend:.0f}，MA20距离={d20:.2%}，MA60距离={d60:.2%}",
         f"风险提示：过热惩罚{overheat:.0f}",
+        "主题标签静态风险：当前仍以规则与静态元数据为主，需结合财报/专利实证",
     ])
 
     # db compatibility mapping

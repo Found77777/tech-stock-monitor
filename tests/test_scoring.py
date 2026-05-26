@@ -76,3 +76,67 @@ def test_low_position_score_uses_structure_not_only_drawdown():
         "liquidity_score": 50,
     })
     assert better["position_score"] > worse["position_score"]
+
+
+def test_metadata_missing_reduces_score():
+    rich = compute_score({
+        "drawdown_from_120d_high": -0.25,
+        "drawdown_from_250d_high": -0.3,
+        "percentile_250d": 0.35,
+        "consolidation_days": 10,
+        "ma_structure_score": 70,
+        "amount_ratio_5d": 1.4,
+        "fundamental_quality": "strong",
+        "policy_theme": "信创",
+        "concept_purity": "core",
+    })
+    missing = compute_score({
+        "drawdown_from_120d_high": -0.25,
+        "drawdown_from_250d_high": -0.3,
+        "percentile_250d": 0.35,
+        "consolidation_days": 10,
+        "ma_structure_score": 70,
+        "amount_ratio_5d": None,
+    })
+    assert rich["total_score"] > missing["total_score"]
+
+
+def test_volume_down_fall_not_high_score():
+    down = compute_score({
+        "drawdown_from_120d_high": -0.2,
+        "drawdown_from_250d_high": -0.25,
+        "percentile_250d": 0.3,
+        "consolidation_days": 8,
+        "ma_structure_score": 60,
+        "distance_to_ma20": -0.05,
+        "distance_to_ma60": -0.08,
+        "amount_ratio_5d": 1.8,
+        "volume_ratio_5d": 1.6,
+        "price_volume_resonance": -1,
+    })
+    up = compute_score({
+        "drawdown_from_120d_high": -0.2,
+        "drawdown_from_250d_high": -0.25,
+        "percentile_250d": 0.3,
+        "consolidation_days": 8,
+        "ma_structure_score": 60,
+        "distance_to_ma20": 0.02,
+        "distance_to_ma60": 0.03,
+        "amount_ratio_5d": 1.8,
+        "volume_ratio_5d": 1.6,
+        "price_volume_resonance": 1,
+    })
+    assert up["momentum_score"] > down["momentum_score"]
+
+
+def test_pure_downtrend_low_position_not_high():
+    s = compute_score({
+        "drawdown_from_120d_high": -0.55,
+        "drawdown_from_250d_high": -0.7,
+        "percentile_250d": 0.05,
+        "consolidation_days": 0,
+        "ma_structure_score": 20,
+        "distance_to_ma20": -0.12,
+        "distance_to_ma60": -0.18,
+    })
+    assert s["position_score"] < 40
