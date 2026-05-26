@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -22,9 +23,35 @@ def fetch(url: str, method: str = "get"):
     try:
         resp = requests.request(method, url, timeout=120)
         resp.raise_for_status()
-        return resp.json(), None
+        return resp.json(), None, resp.status_code
     except Exception as exc:
-        return None, str(exc)
+        status_code = None
+        if isinstance(exc, requests.HTTPError) and exc.response is not None:
+            status_code = exc.response.status_code
+        return None, str(exc), status_code
+
+
+def resolve_data_source(base: str, settings_source: str) -> str:
+    # Prefer backend-reported source from / (SystemStatusResponse).
+    status_payload, _, _ = fetch(f"{base}/")
+    if isinstance(status_payload, dict):
+        backend_source = status_payload.get("data_source")
+        if isinstance(backend_source, str) and backend_source.strip():
+            return backend_source.strip().upper()
+
+    # /health currently only returns status, keep as compatibility probe only.
+    health_payload, _, _ = fetch(f"{base}/health")
+    if isinstance(health_payload, dict):
+        health_source = health_payload.get("data_source") or health_payload.get("real_data_source")
+        if isinstance(health_source, str) and health_source.strip():
+            return health_source.strip().upper()
+
+    # Fallback to environment variable, then local settings.
+    env_source = os.getenv("REAL_DATA_SOURCE")
+    if isinstance(env_source, str) and env_source.strip():
+        return env_source.strip().upper()
+
+    return str(settings_source or "").strip().upper() or "UNKNOWN"
 
 
 def _to_df(obj) -> pd.DataFrame:
@@ -99,9 +126,10 @@ def main():
 
     st.set_page_config(page_title="主板科技低位转强监控器", layout="wide")
     st.title("主板科技低位转强监控器")
+    active_source = resolve_data_source(base, s.data_source_provider)
 
     mode = "MOCK" if s.use_mock_data else "REAL"
-    st.caption(f"数据模式: **{mode}** | REAL_DATA_SOURCE: **{s.data_source_provider}**")
+    st.caption(f"数据模式: **{mode}** | REAL_DATA_SOURCE: **{active_source}**")
     if s.use_mock_data:
         st.warning("当前为演示数据，不可用于投资判断")
 
@@ -111,47 +139,47 @@ def main():
 
     refresh_result = {}
     if c1.button("刷新实时行情", use_container_width=True):
-        d, e = fetch(f"{base}/market/refresh", method="post")
-        refresh_result["market"] = (d, e)
+        d, e, c = fetch(f"{base}/market/refresh", method="post")
+        refresh_result["market"] = (d, e, c)
     if c2.button("刷新历史K线", use_container_width=True):
-        d, e = fetch(f"{base}/history/refresh?days=120", method="post")
-        refresh_result["history"] = (d, e)
+        d, e, c = fetch(f"{base}/history/refresh?days=120", method="post")
+        refresh_result["history"] = (d, e, c)
     if c3.button("生成信号", use_container_width=True):
-        d, e = fetch(f"{base}/signals/generate", method="post")
-        refresh_result["signals"] = (d, e)
+        d, e, c = fetch(f"{base}/signals/generate", method="post")
+        refresh_result["signals"] = (d, e, c)
     if c4.button("生成评分", use_container_width=True):
-        d, e = fetch(f"{base}/scores/generate", method="post")
-        refresh_result["scores"] = (d, e)
+        d, e, c = fetch(f"{base}/scores/generate", method="post")
+        refresh_result["scores"] = (d, e, c)
     if c5.button("一键完整刷新", use_container_width=True):
-        d1, e1 = fetch(f"{base}/market/refresh", method="post")
-        d2, e2 = fetch(f"{base}/history/refresh?days=120", method="post")
-        d3, e3 = fetch(f"{base}/signals/generate", method="post")
-        d4, e4 = fetch(f"{base}/scores/generate", method="post")
+        d1, e1, c1 = fetch(f"{base}/market/refresh", method="post")
+        d2, e2, c2 = fetch(f"{base}/history/refresh?days=120", method="post")
+        d3, e3, c3 = fetch(f"{base}/signals/generate", method="post")
+        d4, e4, c4 = fetch(f"{base}/scores/generate", method="post")
         refresh_result = {
-            "market": (d1, e1),
-            "history": (d2, e2),
-            "signals": (d3, e3),
-            "scores": (d4, e4),
+            "market": (d1, e1, c1),
+            "history": (d2, e2, c2),
+            "signals": (d3, e3, c3),
+            "scores": (d4, e4, c4),
         }
 
-    for key, (data, err) in refresh_result.items():
+    for key, (data, err, status_code) in refresh_result.items():
         if err:
-            st.error(f"{key}: {err}")
+            st.error(f"{key}: {err} (status_code={status_code})")
         else:
             st.success(f"{key}: {data}")
 
     # --- fetch current datasets for dashboard ---
-    snapshot_json, snapshot_err = fetch(f"{base}/market/snapshot")
-    watch_json, watch_err = fetch(f"{base}/watchlist/top?limit=200")
-    signals_json, signals_err = fetch(f"{base}/signals/latest")
+    snapshot_json, snapshot_err, snapshot_status = fetch(f"{base}/market/snapshot")
+    watch_json, watch_err, watch_status = fetch(f"{base}/watchlist/top?limit=50")
+    signals_json, signals_err, signals_status = fetch(f"{base}/signals/latest")
 
     snapshot_df = _df_from_payload(snapshot_json)
     watch_df = _df_from_payload(watch_json)
     signals_df = _df_from_payload(signals_json)
 
-    scores_json, scores_err = fetch(f"{base}/scores/latest")
-    movers_json, movers_err = fetch(f"{base}/market/top-movers?limit=20")
-    backtest_json, backtest_err = fetch(f"{base}/backtest/results/latest")
+    scores_json, scores_err, scores_status = fetch(f"{base}/scores/latest")
+    movers_json, movers_err, movers_status = fetch(f"{base}/market/top-movers?limit=20")
+    backtest_json, backtest_err, backtest_status = fetch(f"{base}/backtest/results/latest")
     scores_df = _df_from_payload(scores_json)
     movers_df = _df_from_payload(movers_json)
     backtest_df = _df_from_payload(backtest_json)
@@ -176,24 +204,24 @@ def main():
     # --- top status bar ---
     st.subheader("顶部状态")
     m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("数据源", s.data_source_provider.upper())
+    m1.metric("数据源", active_source)
     m2.metric("最近刷新时间", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"))
     m3.metric("股票池数量", universe_count)
     m4.metric("实时行情数量", len(snapshot_df))
     m5.metric("历史K线数量", "见 /history/refresh 返回")
 
     if snapshot_err:
-        st.error(f"market/snapshot 读取失败: {snapshot_err}")
+        st.error(f"market/snapshot 读取失败: {snapshot_err} (status_code={snapshot_status})")
     if watch_err:
-        st.error(f"watchlist/top 读取失败: {watch_err}")
+        st.error(f"watchlist/top 读取失败: {watch_err} (status_code={watch_status})")
     if signals_err:
-        st.error(f"signals/latest 读取失败: {signals_err}")
+        st.error(f"signals/latest 读取失败: {signals_err} (status_code={signals_status})")
     if scores_err:
-        st.error(f"scores/latest 读取失败: {scores_err}")
+        st.error(f"scores/latest 读取失败: {scores_err} (status_code={scores_status})")
     if movers_err:
-        st.error(f"market/top-movers 读取失败: {movers_err}")
+        st.error(f"market/top-movers 读取失败: {movers_err} (status_code={movers_status})")
     if backtest_err:
-        st.error(f"backtest/results/latest 读取失败: {backtest_err}")
+        st.error(f"backtest/results/latest 读取失败: {backtest_err} (status_code={backtest_status})")
 
     with st.expander("辅助表格（统一 normalize_records 渲染）", expanded=False):
         st.markdown("**Market Snapshot**")
@@ -243,21 +271,22 @@ def main():
             "name",
             "total_score",
             "position_score",  # low_position_score mapping
-            "fundamental_quality",
-            "policy_theme",
-            "momentum_score",  # capital_inflow_score mapping
+            "trend_score",
+            "momentum_score",
+            "relative_strength_score",
             "liquidity_score",
             "risk_penalty",
             "reasons_text",
         ]
         rename_map = {
             "position_score": "low_position_score",
-            "momentum_score": "capital_inflow_score",
-            "fundamental_quality": "fundamental_score",
             "reasons_text": "reasons",
         }
 
         display_df = filtered[[c for c in show_cols if c in filtered.columns]].rename(columns=rename_map)
+        if filtered.shape[0] > 0 and display_df.empty:
+            st.warning("watchlist records 非空但 DataFrame 为空，显示 raw payload 供排查")
+            st.json(watch_json)
         st.dataframe(display_df, use_container_width=True, height=420)
 
         st.subheader("个股详情")
