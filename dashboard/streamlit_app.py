@@ -252,9 +252,10 @@ def main():
         sector_sel = f1.selectbox("sector", sector_options, index=0)
         policy_sel = f2.selectbox("policy_theme", policy_options, index=0)
         concept_sel = f3.selectbox("concept_purity", concept_options, index=0)
-        min_score = f4.slider("minimum total_score", min_value=0.0, max_value=100.0, value=60.0, step=1.0)
+        min_score = f4.slider("minimum total_score", min_value=0.0, max_value=100.0, value=20.0, step=1.0)
         max_risk = f5.slider("排除 risk_penalty 过高", min_value=0.0, max_value=100.0, value=30.0, step=1.0)
 
+        raw_count = len(watch_df)
         filtered = watch_df.copy()
         if sector_sel != "全部":
             filtered = filtered[filtered["sector"] == sector_sel]
@@ -290,6 +291,9 @@ def main():
         }
 
         display_df = filtered[[c for c in show_cols if c in filtered.columns]].rename(columns=rename_map)
+        st.caption(f"raw_count={raw_count} | filtered_count={len(filtered)} | score_count={len(display_df)}")
+        if raw_count > 0 and len(display_df) == 0:
+            st.warning("当前筛选条件过严，请降低 minimum total_score 或放宽 risk_penalty。")
         if filtered.shape[0] > 0 and display_df.empty:
             st.warning("watchlist records 非空但 DataFrame 为空，显示 raw payload 供排查")
             st.json(watch_json)
