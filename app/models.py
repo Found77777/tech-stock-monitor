@@ -90,6 +90,37 @@ class NewsAnalysis(Base):
     ai_reasons = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
+
+class EnhancedStockScore(Base):
+    __tablename__ = "enhanced_stock_scores"
+    __table_args__ = (UniqueConstraint("code", "trade_date", name="uq_enhanced_score_code_trade_date"),)
+    id = Column(Integer, primary_key=True)
+    code = Column(String(20), index=True, nullable=False)
+    name = Column(String(100), nullable=False)
+    trade_date = Column(String(16), index=True, nullable=False)
+    base_total_score = Column(Float, nullable=False, default=0.0)
+    ai_adjusted_score = Column(Float, nullable=False, default=0.0)
+    ai_sentiment_score = Column(Float, nullable=False, default=0.0)
+    ai_confidence = Column(Float, nullable=False, default=0.0)
+    ai_reasons = Column(Text, nullable=True)
+    original_rank = Column(Integer, nullable=False, default=0)
+    new_rank = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class DailyMarketIntelligence(Base):
+    __tablename__ = "daily_market_intelligence"
+    __table_args__ = (UniqueConstraint("analysis_date", name="uq_daily_market_intelligence_date"),)
+    id = Column(Integer, primary_key=True)
+    analysis_date = Column(String(16), index=True, nullable=False)
+    top_news_json = Column(Text, nullable=True)
+    affected_sectors_json = Column(Text, nullable=True)
+    affected_themes_json = Column(Text, nullable=True)
+    related_stocks_json = Column(Text, nullable=True)
+    market_summary = Column(Text, nullable=False, default="")
+    risk_notes = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
 class BacktestResult(Base):
     __tablename__ = "backtest_results"
     id = Column(Integer, primary_key=True)

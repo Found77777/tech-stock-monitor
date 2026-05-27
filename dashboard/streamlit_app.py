@@ -135,7 +135,7 @@ def main():
 
     # --- operations ---
     st.subheader("操作区")
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
 
     refresh_result = {}
     if c1.button("刷新实时行情", use_container_width=True):
@@ -161,12 +161,51 @@ def main():
             "signals": (d3, e3, c3),
             "scores": (d4, e4, c4),
         }
+    if c6.button("AI 验证 Top10", use_container_width=True):
+        d, e, c = fetch(f"{base}/agent/analyze-top", method="post")
+        refresh_result["ai_top10"] = (d, e, c)
+    if c7.button("每日市场情报", use_container_width=True):
+        d, e, c = fetch(f"{base}/agent/daily-market", method="post")
+        refresh_result["daily_market"] = (d, e, c)
 
     for key, (data, err, status_code) in refresh_result.items():
         if err:
             st.error(f"{key}: {err} (status_code={status_code})")
         else:
             st.success(f"{key}: {data}")
+    if "ai_top10" in refresh_result and not refresh_result["ai_top10"][1]:
+        ai_items = normalize_records(refresh_result["ai_top10"][0].get("items") if isinstance(refresh_result["ai_top10"][0], dict) else refresh_result["ai_top10"][0])
+        if ai_items:
+            ai_df = pd.DataFrame(ai_items)
+            if "ai_reasons" in ai_df.columns:
+                ai_df["ai_reasons"] = ai_df["ai_reasons"].map(_format_reasons)
+            st.subheader("AI 验证 Top10 结果")
+            st.dataframe(
+                ai_df[[c for c in ["original_rank", "new_rank", "code", "name", "original_score", "ai_adjusted_score", "ai_sentiment_score", "ai_confidence", "ai_reasons"] if c in ai_df.columns]],
+                use_container_width=True,
+            )
+    daily_market_json, _, _ = fetch(f"{base}/agent/daily-market/latest")
+    if isinstance(daily_market_json, dict):
+        st.subheader("每日市场情报")
+        st.caption(daily_market_json.get("market_summary", ""))
+        cnews, cstk = st.columns(2)
+        with cnews:
+            st.markdown("**5 条关键新闻**")
+            news_df = pd.DataFrame(daily_market_json.get("top_news_json", []))
+            if not news_df.empty:
+                st.dataframe(news_df[[c for c in ["title", "impact_direction", "impact_horizon", "affected_sectors", "affected_themes", "reason"] if c in news_df.columns]], use_container_width=True)
+            else:
+                st.info("暂无市场情报新闻")
+        with cstk:
+            st.markdown("**相关股票 Top5**")
+            rel_df = pd.DataFrame(daily_market_json.get("related_stocks_json", []))
+            if not rel_df.empty:
+                st.dataframe(rel_df[[c for c in ["code", "name", "relevance_score", "matched_themes", "matched_news_titles", "reason"] if c in rel_df.columns]], use_container_width=True)
+            else:
+                st.info("暂无映射股票")
+        risks = daily_market_json.get("risk_notes", [])
+        if risks:
+            st.warning("；".join(str(x) for x in risks))
 
     # --- fetch current datasets for dashboard ---
     snapshot_json, snapshot_err, snapshot_status = fetch(f"{base}/market/snapshot")
