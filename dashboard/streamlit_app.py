@@ -19,16 +19,22 @@ STATUS_COLOR = {
 }
 
 
-def fetch(url: str, method: str = "get"):
+def fetch(url: str, method: str = "get", payload: dict | None = None):
     try:
-        resp = requests.request(method, url, timeout=120)
+        resp = requests.request(method, url, timeout=120, json=payload)
         resp.raise_for_status()
         return resp.json(), None, resp.status_code
     except Exception as exc:
         status_code = None
+        detail = None
         if isinstance(exc, requests.HTTPError) and exc.response is not None:
             status_code = exc.response.status_code
-        return None, str(exc), status_code
+            try:
+                detail = exc.response.json()
+            except Exception:
+                detail = exc.response.text
+        err = str(exc) if detail is None else f"{exc}; detail={detail}"
+        return None, err, status_code
 
 
 def resolve_data_source(base: str, settings_source: str) -> str:
@@ -161,8 +167,13 @@ def main():
             "signals": (d3, e3, c3),
             "scores": (d4, e4, c4),
         }
+    ai_top_n = st.number_input("AI TopN", min_value=1, max_value=20, value=10, step=1)
     if c6.button("AI 验证 Top10", use_container_width=True):
-        d, e, c = fetch(f"{base}/agent/analyze-top", method="post")
+        d, e, c = fetch(
+            f"{base}/agent/analyze-top",
+            method="post",
+            payload={"top_n": int(ai_top_n), "rerank": True},
+        )
         refresh_result["ai_top10"] = (d, e, c)
     if c7.button("每日市场情报", use_container_width=True):
         d, e, c = fetch(f"{base}/agent/daily-market", method="post")

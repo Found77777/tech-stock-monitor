@@ -116,6 +116,27 @@ class EnhancedStockScore(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
+class NewsAlphaSignal(Base):
+    __tablename__ = "news_alpha_signals"
+    id = Column(Integer, primary_key=True)
+    stock_code = Column(String(20), index=True, nullable=False)
+    analysis_date = Column(String(16), index=True, nullable=False)
+    news_title = Column(Text, nullable=False, default="")
+    news_url = Column(Text, nullable=True)
+    source = Column(String(64), nullable=True)
+    publish_time = Column(String(32), nullable=True)
+    event_type = Column(String(64), nullable=False, default="unknown")
+    impact_direction = Column(String(16), nullable=False, default="neutral")
+    impact_horizon = Column(String(32), nullable=False, default="short_term")
+    relevance_score = Column(Float, nullable=False, default=0.0)
+    importance_score = Column(Float, nullable=False, default=0.0)
+    freshness_score = Column(Float, nullable=False, default=0.0)
+    confidence = Column(Float, nullable=False, default=0.0)
+    single_news_alpha = Column(Float, nullable=False, default=0.0)
+    alpha_reasons = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
 class DailyMarketIntelligence(Base):
     __tablename__ = "daily_market_intelligence"
     __table_args__ = (UniqueConstraint("analysis_date", name="uq_daily_market_intelligence_date"),)

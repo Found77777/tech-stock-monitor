@@ -14,10 +14,11 @@ from sqlalchemy.orm import Session
 
 from app.agent.daily_market_agent import DailyMarketIntelligenceAgent
 from app.agent.news_agent import NewsAgent
+from app.agent.news_alpha_engine import compute_news_alpha
 from app.agent.sentiment_scorer import merge_market_overview, score_from_analysis
 from app.config import get_settings
 from app.database import get_db
-from app.models import DailyBar, DailyMarketIntelligence, EnhancedStockScore, NewsAnalysis, StockScore
+from app.models import DailyBar, DailyMarketIntelligence, EnhancedStockScore, NewsAlphaSignal, NewsAnalysis, StockScore
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -65,8 +66,19 @@ async def analyze_news(req: AnalyzeRequest, db: Session = Depends(get_db)):
     logger.info("agent analyze requested stock_codes=%s", codes)
     results = {"stock_analyses": [], "market_overview": None}
     if codes:
+        source_debug: dict[str, dict] = {}
+        fetched_news_count: dict[str, int] = {}
+        if hasattr(agent, "fetch_stock_news"):
+            for code in codes:
+                items, dbg = await agent.fetch_stock_news(code)
+                source_debug[code] = dbg
+                fetched_news_count[code] = len(items)
+        else:
+            for code in codes:
+                fetched_news_count[code] = 0
+                source_debug[code] = {"debug_reason": "agent_has_no_fetch_stock_news"}
         analyses = await agent.analyze_stocks(codes)
-        fetched_counts: dict[str, int] = {code: 0 for code in codes}
+        fetched_counts: dict[str, int] = {code: int(fetched_news_count.get(code, 0)) for code in codes}
         by_code = {}
         for a in analyses:
             c = _norm_code(a.get("stock_code", ""))
@@ -114,6 +126,8 @@ async def analyze_news(req: AnalyzeRequest, db: Session = Depends(get_db)):
             }
             _upsert_news_analysis(db, rec)
             results["stock_analyses"].append(rec)
+        results["fetched_news_count"] = fetched_counts
+        results["source_debug"] = source_debug
         logger.info("agent generated stock analysis count=%s", len(results["stock_analyses"]))
     if req.include_market_overview:
         overview = await agent.market_overview()
@@ -237,7 +251,8 @@ async def analyze_top(req: AnalyzeTopRequest, db: Session = Depends(get_db)):
 
     # reuse analyze flow logic for specified codes only
     analyze_req = AnalyzeRequest(stock_codes=codes, include_market_overview=True)
-    await analyze_news(analyze_req, db)
+    analyze_result = await analyze_news(analyze_req, db)
+    source_debug = analyze_result.get("source_debug", {}) if isinstance(analyze_result, dict) else {}
 
     news_rows = db.query(NewsAnalysis).filter_by(analysis_date=datetime.now().strftime("%Y-%m-%d")).all()
     news_map = { _norm_code(n.stock_code): n for n in news_rows if n.stock_code != "MARKET" }
@@ -249,10 +264,37 @@ async def analyze_top(req: AnalyzeTopRequest, db: Session = Depends(get_db)):
         ai_pol = _sanitize_num(getattr(n, "ai_policy_boost", 0), -15, 15) if n else 0.0
         ai_fun = _sanitize_num(getattr(n, "ai_fundamental_boost", 0), -10, 10) if n else 0.0
         ai_reasons = json.loads(n.ai_reasons) if (n and n.ai_reasons) else ["未抓取到有效新闻，暂不调整评分"]
-        adj = _calc_ai_adjustment(ai_sent, ai_conf, ai_pol, ai_fun, ai_reasons)
-        ai_score = _sanitize_num(float(getattr(s, "enhanced_score", 0) or getattr(s, "base_total_score", 0) or getattr(s, "total_score", 0)) + adj, 0, 100)
+
+        code = _norm_code(s.code)
+        stock_debug = source_debug.get(code, {})
+        news_items = list((stock_debug.get("final_news") or []))[:5]
+        stock_meta = {"code": code, "name": s.name or ""}
+        alpha = compute_news_alpha(news_items, stock_meta)
+        alpha_adj = _sanitize_num(alpha.get("news_alpha_adjustment", 0), -10, 10)
+        if ai_reasons and any("未抓取到有效新闻" in str(x) for x in ai_reasons):
+            alpha_adj = 0.0
+
+        base_total = _sanitize_num(float(getattr(s, "base_total_score", 0) or getattr(s, "total_score", 0)), 0, 100)
+        capital_adj = _sanitize_num(float(getattr(s, "capital_flow_adjustment", 0)), -8, 8)
+        pre_ai_enhanced = _sanitize_num(float(getattr(s, "enhanced_score", 0) or (base_total + capital_adj)), 0, 100)
+        ai_score = _sanitize_num(pre_ai_enhanced + alpha_adj, 0, 100)
         flow_data = _fetch_capital_flow_with_cache(s.code, trade_date, settings)
-        base_score = _sanitize_num(float(getattr(s, "base_total_score", 0) or getattr(s, "total_score", 0)), 0, 100)
+        base_score = base_total
+
+        # persist per-news alpha details
+        db.query(NewsAlphaSignal).filter_by(stock_code=code, analysis_date=trade_date).delete()
+        for ev in alpha.get("top_news_events", []):
+            db.add(NewsAlphaSignal(
+                stock_code=code, analysis_date=trade_date, news_title=str(ev.get("title", "")),
+                news_url="", source="", publish_time="", event_type=str(ev.get("event_type", "unknown")),
+                impact_direction=str(ev.get("impact_direction", "neutral")), impact_horizon=str(ev.get("impact_horizon", "short_term")),
+                relevance_score=_sanitize_num(ev.get("news_relevance_score", 0), 0, 100),
+                importance_score=_sanitize_num(ev.get("news_importance_score", 0), 0, 100),
+                freshness_score=_sanitize_num(ev.get("news_freshness_score", 0), 0, 100),
+                confidence=_sanitize_num(ev.get("confidence", 0), 0, 1),
+                single_news_alpha=_sanitize_num(ev.get("single_news_alpha", 0), -100, 100),
+                alpha_reasons=json.dumps(ev.get("alpha_reasons", []), ensure_ascii=False),
+            ))
         out.append({
             "original_rank": idx,
             "code": _norm_code(s.code),
@@ -260,8 +302,14 @@ async def analyze_top(req: AnalyzeTopRequest, db: Session = Depends(get_db)):
             "original_score": base_score,
             "ai_adjusted_score": ai_score,
             "ai_sentiment_score": ai_sent,
-            "ai_confidence": ai_conf / 100.0,
+            "ai_confidence": alpha.get("confidence", 0.0),
             "ai_reasons": ai_reasons,
+            "ai_adjustment": alpha_adj,
+            "news_alpha_adjustment": alpha_adj,
+            "top_news_events": alpha.get("top_news_events", []),
+            "news_alpha_summary": alpha.get("news_alpha_summary", ""),
+            "risk_flags": alpha.get("risk_flags", []),
+            "capital_flow_adjustment": capital_adj,
             "capital_flow_source": flow_data.get("capital_flow_source", "proxy"),
         })
     reranked = sorted(out, key=lambda x: x["ai_adjusted_score"], reverse=True)
@@ -276,8 +324,9 @@ async def analyze_top(req: AnalyzeTopRequest, db: Session = Depends(get_db)):
             "ai_sentiment_score": row["ai_sentiment_score"], "ai_confidence": row["ai_confidence"],
             "ai_reasons": json.dumps(row["ai_reasons"], ensure_ascii=False),
             "original_rank": row["original_rank"], "new_rank": row["new_rank"],
-            "ai_adjustment": _sanitize_num(row["ai_adjusted_score"] - row["original_score"], -10, 10),
+            "ai_adjustment": _sanitize_num(row.get("news_alpha_adjustment", row.get("ai_adjustment", 0)), -10, 10),
             "enhanced_score": row["ai_adjusted_score"],
+            "reasons": json.dumps(row.get("risk_flags", []), ensure_ascii=False),
             "enhanced_rank": row["new_rank"],
         }
         if es:
@@ -288,6 +337,34 @@ async def analyze_top(req: AnalyzeTopRequest, db: Session = Depends(get_db)):
     logger.info("agent analyze-top rerank result=%s", [(x["code"], x["original_rank"], x["new_rank"]) for x in out])
     db.commit()
     return {"trade_date": trade_date, "top_n": top_n, "items": sorted(out, key=lambda x: x["new_rank"])}
+
+
+@router.get("/news-alpha/latest")
+def news_alpha_latest(code: str, db: Session = Depends(get_db)):
+    norm = _norm_code(code)
+    td = db.query(func.max(NewsAlphaSignal.analysis_date)).filter(NewsAlphaSignal.stock_code == norm).scalar()
+    if not td:
+        return {"code": norm, "analysis_date": None, "items": []}
+    rows = db.query(NewsAlphaSignal).filter_by(stock_code=norm, analysis_date=td).all()
+    return {
+        "code": norm,
+        "analysis_date": td,
+        "items": [
+            {
+                "news_title": r.news_title,
+                "event_type": r.event_type,
+                "impact_direction": r.impact_direction,
+                "impact_horizon": r.impact_horizon,
+                "relevance_score": r.relevance_score,
+                "importance_score": r.importance_score,
+                "freshness_score": r.freshness_score,
+                "confidence": r.confidence,
+                "single_news_alpha": r.single_news_alpha,
+                "alpha_reasons": json.loads(r.alpha_reasons) if r.alpha_reasons else [],
+            }
+            for r in rows
+        ],
+    }
 
 
 @router.post("/daily-market")

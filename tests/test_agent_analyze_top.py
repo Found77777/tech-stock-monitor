@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 from app.api import agent_routes
 from app.database import Base, engine, SessionLocal
 from app.main import app
-from app.models import StockScore
+from app.models import EnhancedStockScore, StockScore
 
 
 class DummyAgent:
@@ -26,6 +26,7 @@ class DummyAgent:
 def _seed_scores(n=12):
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
+    db.query(EnhancedStockScore).delete()
     db.query(StockScore).delete()
     for i in range(n):
         code = f"{i+1:06d}"

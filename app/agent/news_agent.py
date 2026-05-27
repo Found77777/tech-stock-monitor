@@ -21,6 +21,7 @@ class NewsAgent:
         self.llm_base_url = getattr(settings, "llm_base_url", "https://api.openai.com/v1")
         self.llm_model = getattr(settings, "llm_model", "gpt-4o-mini")
         self.news_sources = _build_news_sources(settings)
+        self.last_source_debug: dict[str, Any] = {}
 
     async def analyze_stocks(self, stock_codes: list[str]) -> list[dict]:
         news_items = await self._fetch_all_news(stock_codes)
@@ -43,12 +44,61 @@ class NewsAgent:
 
     async def _fetch_all_news(self, stock_codes: list[str]) -> list[dict]:
         all_news: list[dict] = []
+        source_success_counts: dict[str, int] = {}
+        source_errors: dict[str, str] = {}
+        for code in stock_codes:
+            code_news, debug = await self.fetch_stock_news(str(code))
+            all_news.extend(code_news)
+            for k, v in (debug.get("source_success_counts", {}) or {}).items():
+                source_success_counts[k] = source_success_counts.get(k, 0) + int(v)
+            for k, v in (debug.get("source_errors", {}) or {}).items():
+                source_errors[k] = v
+        self.last_source_debug = {
+            "source_success_counts": source_success_counts,
+            "source_errors": source_errors,
+            "final_return_count": len(all_news),
+        }
+        return all_news
+
+    async def fetch_stock_news(self, code: str) -> tuple[list[dict], dict]:
+        all_news: list[dict] = []
+        source_success_counts: dict[str, int] = {}
+        source_errors: dict[str, str] = {}
         for source in self.news_sources:
             try:
-                all_news.extend(await source.fetch(stock_codes))
-            except Exception:
-                logger.exception("News source %s failed", source.name)
-        return _dedup_news(_normalize_news_items(all_news))
+                got = await source.fetch([code])
+                cnt = len(got or [])
+                if cnt > 0:
+                    source_success_counts[source.name] = source_success_counts.get(source.name, 0) + cnt
+                    all_news.extend(got)
+            except Exception as exc:
+                source_errors[source.name] = str(exc)
+                logger.exception("News source %s failed code=%s", source.name, code)
+        before = len(all_news)
+        normalized = _normalize_news_items(all_news)
+        deduped = _dedup_news(normalized)
+        after = len(deduped)
+        if after == 0:
+            if before == 0 and source_errors:
+                reason = "source_errors_only"
+            elif before == 0:
+                reason = "all_sources_empty"
+            else:
+                reason = "parsed_but_filtered_out"
+        else:
+            reason = "ok"
+        debug = {
+            "code": code,
+            "source_success_counts": source_success_counts,
+            "source_errors": source_errors,
+            "total_before_dedupe": before,
+            "total_after_dedupe": after,
+            "final_return_count": after,
+            "debug_reason": reason,
+        }
+        logger.info("stock_news_aggregate code=%s source_success_counts=%s total_before_dedupe=%s total_after_dedupe=%s final_return_count=%s debug_reason=%s",
+                    code, source_success_counts, before, after, after, reason)
+        return deduped, debug
 
     async def _fetch_market_news(self) -> list[dict]:
         all_news: list[dict] = []
@@ -159,7 +209,9 @@ class EastMoneyNews(_BaseNewsSource):
                         m = re.search(r"jQuery\((.*)\)", resp.text, re.DOTALL)
                         if m:
                             data = json.loads(m.group(1))
-                            for article in data.get("result", []):
+                            for article in data.get("result", []) or []:
+                                if not isinstance(article, dict):
+                                    continue
                                 items.append({"source": "东方财富", "title": article.get("title", ""), "summary": (article.get("content", "") or "")[:220], "url": article.get("url", ""), "publish_time": article.get("date", ""), "stock_code": code})
                                 parsed_count += 1
                     logger.info("news_parse source=%s code=%s parsed_news_count=%s", self.name, code, parsed_count)
@@ -200,7 +252,8 @@ class CninfoNews(_BaseNewsSource):
                     parsed_count = 0
                     if resp.status_code == 200:
                         body = resp.json()
-                        for ann in body.get("announcements", []):
+                        anns = body.get("announcements") or []
+                        for ann in anns:
                             adjs = ann.get("adjunctUrl", "")
                             full_url = f"http://static.cninfo.com.cn/{adjs}" if adjs else ""
                             items.append({"source": "巨潮资讯", "title": ann.get("announcementTitle", ""), "summary": ann.get("announcementTitle", ""), "url": full_url, "publish_time": ann.get("announcementTime", ""), "stock_code": code})
