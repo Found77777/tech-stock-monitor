@@ -82,3 +82,10 @@ def test_capital_flow_proxy_default():
         capital_flow_source = "proxy"
     out = agent_routes._fetch_capital_flow_with_cache("000001", "2026-05-27", S())
     assert out["capital_flow_source"] == "proxy"
+
+
+def test_infer_akshare_fund_flow_market():
+    assert agent_routes.infer_akshare_fund_flow_market("600850") == "沪市"
+    assert agent_routes.infer_akshare_fund_flow_market("002456") == "深市"
+    assert agent_routes.infer_akshare_fund_flow_market("000001") == "深市"
+    assert agent_routes.infer_akshare_fund_flow_market("603019") == "沪市"

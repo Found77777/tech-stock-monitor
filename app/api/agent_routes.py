@@ -29,6 +29,15 @@ def _norm_code(code: str) -> str:
     return c[-6:].zfill(6) if c else ""
 
 
+def infer_akshare_fund_flow_market(code: str) -> str:
+    c = _norm_code(code)
+    if c.startswith(("600", "601", "603", "605")):
+        return "沪市"
+    if c.startswith(("000", "001", "002", "003")):
+        return "深市"
+    return "深市"
+
+
 class AnalyzeRequest(BaseModel):
     stock_codes: list[str] | None = None
     include_market_overview: bool = True
@@ -183,7 +192,9 @@ def _fetch_capital_flow_with_cache(code: str, trade_date: str, settings) -> dict
     for attempt in range(3):  # 1 + 2 retries
         try:
             import akshare as ak
-            df = ak.stock_individual_fund_flow(stock=_norm_code(code), market="沪深京A股")
+            market = infer_akshare_fund_flow_market(code)
+            logger.info("capital flow request fn=stock_individual_fund_flow code=%s inferred_market=%s", _norm_code(code), market)
+            df = ak.stock_individual_fund_flow(stock=_norm_code(code), market=market)
             if df is None or df.empty:
                 raise ValueError("empty fund flow")
             latest = df.iloc[0]
@@ -249,7 +260,7 @@ async def analyze_top(req: AnalyzeTopRequest, db: Session = Depends(get_db)):
             "ai_sentiment_score": ai_sent,
             "ai_confidence": ai_conf / 100.0,
             "ai_reasons": ai_reasons,
-              "capital_flow_source": flow_data.get("capital_flow_source", "proxy"),
+            "capital_flow_source": flow_data.get("capital_flow_source", "proxy"),
         })
     reranked = sorted(out, key=lambda x: x["ai_adjusted_score"], reverse=True)
     rank_map = {x["code"]: i + 1 for i, x in enumerate(reranked)}
