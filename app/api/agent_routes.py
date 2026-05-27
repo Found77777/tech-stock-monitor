@@ -249,7 +249,7 @@ async def analyze_top(req: AnalyzeTopRequest, db: Session = Depends(get_db)):
             "ai_sentiment_score": ai_sent,
             "ai_confidence": ai_conf / 100.0,
             "ai_reasons": ai_reasons,
-            "capital_flow_source": flow_data.get("capital_flow_source", "proxy"),
+              "capital_flow_source": flow_data.get("capital_flow_source", "proxy"),
         })
     reranked = sorted(out, key=lambda x: x["ai_adjusted_score"], reverse=True)
     rank_map = {x["code"]: i + 1 for i, x in enumerate(reranked)}
