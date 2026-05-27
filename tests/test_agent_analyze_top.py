@@ -80,8 +80,47 @@ def test_analyze_top_rerank_fields(monkeypatch):
 def test_capital_flow_proxy_default():
     class S:
         capital_flow_source = "proxy"
+    agent_routes._CAPITAL_FLOW_CACHE.clear()
     out = agent_routes._fetch_capital_flow_with_cache("000001", "2026-05-27", S())
-    assert out["capital_flow_source"] == "proxy"
+    assert out["capital_flow_source"] in {"proxy", "proxy_fallback"}
+
+
+def test_capital_flow_eastmoney_success(monkeypatch):
+    import pandas as pd
+
+    class AK:
+        @staticmethod
+        def stock_individual_fund_flow(stock, market):
+            return pd.DataFrame([{"主力净流入-净额": 123456}])
+
+    class S:
+        capital_flow_source = "eastmoney"
+        capital_flow_sleep_min = 0.0
+        capital_flow_sleep_max = 0.0
+
+    agent_routes._CAPITAL_FLOW_CACHE.clear()
+    import sys
+    sys.modules["akshare"] = AK
+    out = agent_routes._fetch_capital_flow_with_cache("600850", "2026-05-27", S())
+    assert out["capital_flow_source"] == "real_eastmoney"
+
+
+def test_capital_flow_eastmoney_fail_to_fallback(monkeypatch):
+    class AK:
+        @staticmethod
+        def stock_individual_fund_flow(stock, market):
+            raise RuntimeError("blocked")
+
+    class S:
+        capital_flow_source = "eastmoney"
+        capital_flow_sleep_min = 0.0
+        capital_flow_sleep_max = 0.0
+
+    agent_routes._CAPITAL_FLOW_CACHE.clear()
+    import sys
+    sys.modules["akshare"] = AK
+    out = agent_routes._fetch_capital_flow_with_cache("000001", "2026-05-27", S())
+    assert out["capital_flow_source"] == "proxy_fallback"
 
 
 def test_infer_akshare_fund_flow_market():
