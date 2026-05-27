@@ -20,8 +20,26 @@ class NewsAgent:
         self.llm_api_key = getattr(settings, "llm_api_key", "")
         self.llm_base_url = getattr(settings, "llm_base_url", "https://api.openai.com/v1")
         self.llm_model = getattr(settings, "llm_model", "gpt-4o-mini")
+        self.llm_http_proxy = str(getattr(settings, "llm_http_proxy", "") or "").strip()
         self.news_sources = _build_news_sources(settings)
         self.last_source_debug: dict[str, Any] = {}
+
+
+    def _build_client_kwargs(self, timeout: float, use_llm_proxy: bool = False) -> dict:
+        kwargs: dict[str, Any] = {"timeout": timeout, "trust_env": False}
+        if use_llm_proxy and self.llm_http_proxy:
+            kwargs["proxy"] = self.llm_http_proxy
+        return kwargs
+
+    def _create_async_client(self, timeout: float, use_llm_proxy: bool = False) -> httpx.AsyncClient:
+        kwargs = self._build_client_kwargs(timeout=timeout, use_llm_proxy=use_llm_proxy)
+        try:
+            return httpx.AsyncClient(**kwargs)
+        except TypeError:
+            if "proxy" in kwargs:
+                proxy = kwargs.pop("proxy")
+                kwargs["proxies"] = {"http://": proxy, "https://": proxy}
+            return httpx.AsyncClient(**kwargs)
 
     async def analyze_stocks(self, stock_codes: list[str]) -> list[dict]:
         news_items = await self._fetch_all_news(stock_codes)
@@ -114,7 +132,7 @@ class NewsAgent:
             return "[]"
         headers = {"Authorization": f"Bearer {self.llm_api_key}", "Content-Type": "application/json"}
         payload = {"model": self.llm_model, "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user_prompt}], "temperature": 0.3, "max_tokens": 2048}
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with self._create_async_client(timeout=60, use_llm_proxy=True) as client:
             resp = await client.post(f"{self.llm_base_url}/chat/completions", headers=headers, json=payload)
             resp.raise_for_status()
             return resp.json()["choices"][0]["message"]["content"]
@@ -161,7 +179,7 @@ class SinaFinanceNews(_BaseNewsSource):
 
     async def fetch(self, stock_codes: list[str]) -> list[dict]:
         items: list[dict] = []
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
             for code in stock_codes[:20]:
                 symbol = f"sh{code}" if str(code).startswith("6") else f"sz{code}"
                 url = f"https://vip.stock.finance.sina.com.cn/corp/go.php/vCB_AllNewsStock/symbol/{symbol}.phtml"
@@ -180,7 +198,7 @@ class SinaFinanceNews(_BaseNewsSource):
         items: list[dict] = []
         url = "https://zhibo.sina.com.cn/api/zhibo/feed?page=1&page_size=20&zhibo_id=152"
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
+            async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
                 resp = await self._get(client, url, headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code == 200:
                     data = resp.json()
@@ -198,7 +216,7 @@ class EastMoneyNews(_BaseNewsSource):
 
     async def fetch(self, stock_codes: list[str]) -> list[dict]:
         items: list[dict] = []
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
             for code in stock_codes[:20]:
                 query = quote(code)
                 article_url = f"https://search-api-web.eastmoney.com/search/jsonp?cb=jQuery&param=%7B%22uid%22%3A%22%22%2C%22keyword%22%3A%22{query}%22%2C%22type%22%3A%5B%22cmsArticleWebOld%22%2C%22stock_notice%22%5D%2C%22pageIndex%22%3A1%2C%22pageSize%22%3A8%7D"
@@ -233,7 +251,7 @@ class CninfoNews(_BaseNewsSource):
             "Origin": "http://www.cninfo.com.cn",
             "Referer": "http://www.cninfo.com.cn/new/commonUrl/pageOfSearch?url=disclosure/list/search&checkedCategory=category_ndbg_szsh;",
         }
-        async with httpx.AsyncClient(timeout=20) as client:
+        async with httpx.AsyncClient(timeout=20, trust_env=False) as client:
             for code in stock_codes[:20]:
                 try:
                     data = {
@@ -269,7 +287,7 @@ class BaiduNewsFallback(_BaseNewsSource):
 
     async def fetch(self, stock_codes: list[str]) -> list[dict]:
         items: list[dict] = []
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
             for code in stock_codes[:20]:
                 q = quote(f"{code} 股票")
                 url = f"https://news.baidu.com/ns?word={q}&tn=news&from=news&cl=2&rn=8"
@@ -293,7 +311,7 @@ class RssNewsFallback(_BaseNewsSource):
 
     async def fetch(self, stock_codes: list[str]) -> list[dict]:
         items: list[dict] = []
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
             for code in stock_codes[:20]:
                 q = quote(f"{code} A股")
                 url = f"https://news.google.com/rss/search?q={q}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"

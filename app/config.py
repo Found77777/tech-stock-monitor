@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     llm_api_key: str = Field(default="")
     llm_base_url: str = Field(default="https://api.openai.com/v1")
     llm_model: str = Field(default="gpt-4o-mini")
+    llm_http_proxy: str = Field(default="")
     agent_news_sources: str = Field(default="sina,eastmoney,xueqiu")
     agent_enabled: bool = Field(default=False)
     capital_flow_source: str = Field(default="proxy")  # proxy|eastmoney
@@ -43,6 +44,7 @@ class Settings(BaseSettings):
     capital_flow_sleep_max: float = Field(default=3.0)
     capital_flow_retry: int = Field(default=2)
     capital_flow_cache_enabled: bool = Field(default=True)
+    enable_factor_redundancy_adjustment: bool = Field(default=False)
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=False)
 

@@ -63,3 +63,17 @@ USE_MOCK_DATA=false
 - 科技方向通过 `sector/theme` 字段维护
 
 后续可升级为申万行业/中证行业/概念板块自动更新。
+
+
+### 代理配置建议
+不再建议在 Terminal 全局 `export HTTP_PROXY/HTTPS_PROXY`。
+
+请在 `.env` 中仅配置 LLM 代理：
+
+```
+LLM_HTTP_PROXY=http://127.0.0.1:7890
+```
+
+说明：
+- DeepSeek/OpenAI 调用使用 `LLM_HTTP_PROXY`。
+- AKShare/EastMoney 直连（不走该代理）。
