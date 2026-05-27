@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 
 import pandas as pd
@@ -15,6 +16,7 @@ from app.scoring.score_engine import compute_score
 from app.signals.signal_engine import generate_signals
 from app.universe.tech_universe import load_tech_universe_df
 
+logger = logging.getLogger(__name__)
 
 class AnalysisService:
     @staticmethod
@@ -121,6 +123,7 @@ class AnalysisService:
             scored.append({"code": code, "name": resolved_name, **s})
         scored.sort(key=lambda x: x["total_score"], reverse=True)
         inserted = 0
+        dummy_name_count = 0
         for i, s in enumerate(scored, start=1):
             payload = {
                 "code": s["code"],
@@ -137,6 +140,13 @@ class AnalysisService:
                 "reasons": json.dumps(s["reasons"], ensure_ascii=False),
             }
             payload["name"] = str(payload.get("name") or payload.get("code"))
+            if payload["name"].startswith("N") and payload["name"][1:].isdigit() and len(payload["name"]) == 7:
+                dummy_name_count += 1
+                logger.error("skip dummy score row code=%s name=%s", payload.get("code"), payload.get("name"))
+                continue
+            if not s.get("reasons"):
+                logger.warning("skip score row without reasons code=%s", payload.get("code"))
+                continue
             for k in ["total_score","trend_score","momentum_score","relative_strength_score","liquidity_score","position_score","risk_penalty"]:
                 payload[k] = self._safe_db_score(payload.get(k))
             if db.query(StockScore).filter_by(code=s["code"], trade_date=td).first():
@@ -144,14 +154,24 @@ class AnalysisService:
             db.add(StockScore(**payload))
             inserted += 1
         db.commit()
-        return {"rows": len(rows), "inserted": inserted}
+        unique_codes = len({x["code"] for x in scored})
+        logger.warning("generate_scores summary score_count=%s unique_code_count=%s dummy_name_count=%s", inserted, unique_codes, dummy_name_count)
+        return {"rows": len(rows), "inserted": inserted, "unique_code_count": unique_codes, "dummy_name_count": dummy_name_count}
 
     def latest_scores(self, db: Session) -> list[dict]:
         td = db.query(func.max(StockScore.trade_date)).scalar()
         if not td:
             return []
         res = db.query(StockScore).filter_by(trade_date=td).order_by(desc(StockScore.total_score)).all()
-        return [{"code":x.code,"name":x.name,"total_score":x.total_score,"trend_score":x.trend_score,"momentum_score":x.momentum_score,"relative_strength_score":x.relative_strength_score,"liquidity_score":x.liquidity_score,"position_score":x.position_score,"risk_penalty":x.risk_penalty,"recent_strength_score":x.momentum_score,"rank":x.rank,"reasons":json.loads(x.reasons)} for x in res]
+        out = []
+        for x in res:
+            code = str(x.code or "")
+            name = str(x.name or "")
+            if name.startswith("N") and name[1:].isdigit() and len(name) == 7:
+                logger.error("filtered dummy score row from latest_scores code=%s name=%s", code, name)
+                continue
+            out.append({"code":code,"name":name,"total_score":x.total_score,"trend_score":x.trend_score,"momentum_score":x.momentum_score,"relative_strength_score":x.relative_strength_score,"liquidity_score":x.liquidity_score,"position_score":x.position_score,"risk_penalty":x.risk_penalty,"recent_strength_score":x.momentum_score,"rank":x.rank,"reasons":json.loads(x.reasons) if x.reasons else []})
+        return out
 
 
     def _load_ai_analyses(self, db: Session, trade_date: str) -> dict[str, dict]:
