@@ -124,7 +124,7 @@ def test_capital_flow_eastmoney_fail_to_fallback(monkeypatch):
 
 
 def test_infer_akshare_fund_flow_market():
-    assert agent_routes.infer_akshare_fund_flow_market("600850") == "沪市"
-    assert agent_routes.infer_akshare_fund_flow_market("002456") == "深市"
-    assert agent_routes.infer_akshare_fund_flow_market("000001") == "深市"
-    assert agent_routes.infer_akshare_fund_flow_market("603019") == "沪市"
+    assert agent_routes.infer_akshare_fund_flow_market("600850") == "sh"
+    assert agent_routes.infer_akshare_fund_flow_market("603236") == "sh"
+    assert agent_routes.infer_akshare_fund_flow_market("002465") == "sz"
+    assert agent_routes.infer_akshare_fund_flow_market("000001") == "sz"

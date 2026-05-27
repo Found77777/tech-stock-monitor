@@ -32,10 +32,12 @@ def _norm_code(code: str) -> str:
 def infer_akshare_fund_flow_market(code: str) -> str:
     c = _norm_code(code)
     if c.startswith(("600", "601", "603", "605")):
-        return "沪市"
+        return "sh"
     if c.startswith(("000", "001", "002", "003")):
-        return "深市"
-    return "深市"
+        return "sz"
+    if c.startswith(("8", "4")):
+        return "bj"
+    return "sz"
 
 
 class AnalyzeRequest(BaseModel):
