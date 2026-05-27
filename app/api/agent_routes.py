@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import random
+import time
 from datetime import datetime
 
 from fastapi import APIRouter, Depends
@@ -19,6 +21,7 @@ from app.models import DailyBar, DailyMarketIntelligence, EnhancedStockScore, Ne
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+_CAPITAL_FLOW_CACHE: dict[tuple[str, str], dict] = {}
 
 
 def _norm_code(code: str) -> str:
@@ -164,18 +167,55 @@ def _calc_ai_adjustment(ai_sentiment: float, ai_conf: float, ai_policy: float, a
     return _sanitize_num(adj, -cap, cap)
 
 
+def _fetch_capital_flow_with_cache(code: str, trade_date: str, settings) -> dict:
+    key = (_norm_code(code), trade_date)
+    if key in _CAPITAL_FLOW_CACHE:
+        return _CAPITAL_FLOW_CACHE[key]
+
+    source = str(getattr(settings, "capital_flow_source", "proxy")).lower()
+    if source != "eastmoney":
+        payload = {"capital_flow_source": "proxy", "net_inflow_1d": 0.0, "net_inflow_5d": 0.0, "net_inflow_10d": 0.0}
+        _CAPITAL_FLOW_CACHE[key] = payload
+        return payload
+
+    sleep_min = float(getattr(settings, "capital_flow_sleep_min", 1.5))
+    sleep_max = float(getattr(settings, "capital_flow_sleep_max", 3.0))
+    for attempt in range(3):  # 1 + 2 retries
+        try:
+            import akshare as ak
+            df = ak.stock_individual_fund_flow(stock=_norm_code(code), market="沪深京A股")
+            if df is None or df.empty:
+                raise ValueError("empty fund flow")
+            latest = df.iloc[0]
+            n1 = _sanitize_num(latest.get("主力净流入-净额", 0), -1e13, 1e13)
+            payload = {"capital_flow_source": "real_eastmoney", "net_inflow_1d": n1, "net_inflow_5d": 0.0, "net_inflow_10d": 0.0}
+            _CAPITAL_FLOW_CACHE[key] = payload
+            return payload
+        except Exception as exc:
+            logger.warning("capital flow fetch failed code=%s attempt=%s err=%s", code, attempt + 1, exc)
+            if attempt < 2:
+                time.sleep(random.uniform(sleep_min, sleep_max))
+    payload = {"capital_flow_source": "proxy_fallback", "net_inflow_1d": 0.0, "net_inflow_5d": 0.0, "net_inflow_10d": 0.0}
+    _CAPITAL_FLOW_CACHE[key] = payload
+    return payload
+
+
 @router.post("/analyze-top")
 async def analyze_top(req: AnalyzeTopRequest, db: Session = Depends(get_db)):
-    top_n = int(req.top_n or 10)
+    settings = get_settings()
+    top_n_default = int(getattr(settings, "capital_flow_top_n", 10))
+    top_n = int(req.top_n or top_n_default)
     if top_n <= 0:
         raise HTTPException(status_code=400, detail="top_n must be > 0")
     if top_n > 20:
         raise HTTPException(status_code=400, detail="top_n too large; max is 20")
 
-    trade_date = req.date or db.query(func.max(StockScore.trade_date)).scalar()
+    trade_date = req.date or db.query(func.max(EnhancedStockScore.trade_date)).scalar() or db.query(func.max(StockScore.trade_date)).scalar()
     if not trade_date:
         return {"items": [], "message": "no score data"}
-    base_rows = db.query(StockScore).filter_by(trade_date=trade_date).order_by(desc(StockScore.total_score)).limit(top_n).all()
+    base_rows = db.query(EnhancedStockScore).filter_by(trade_date=trade_date).order_by(desc(EnhancedStockScore.enhanced_score)).limit(top_n).all()
+    if not base_rows:
+        base_rows = db.query(StockScore).filter_by(trade_date=trade_date).order_by(desc(StockScore.total_score)).limit(top_n).all()
     if not base_rows:
         return {"items": [], "message": "no score rows in date"}
     codes = [_norm_code(x.code) for x in base_rows]
@@ -197,16 +237,19 @@ async def analyze_top(req: AnalyzeTopRequest, db: Session = Depends(get_db)):
         ai_fun = _sanitize_num(getattr(n, "ai_fundamental_boost", 0), -10, 10) if n else 0.0
         ai_reasons = json.loads(n.ai_reasons) if (n and n.ai_reasons) else ["未抓取到有效新闻，暂不调整评分"]
         adj = _calc_ai_adjustment(ai_sent, ai_conf, ai_pol, ai_fun, ai_reasons)
-        ai_score = _sanitize_num(float(s.total_score) + adj, 0, 100)
+        ai_score = _sanitize_num(float(getattr(s, "enhanced_score", 0) or getattr(s, "base_total_score", 0) or getattr(s, "total_score", 0)) + adj, 0, 100)
+        flow_data = _fetch_capital_flow_with_cache(s.code, trade_date, settings)
+        base_score = _sanitize_num(float(getattr(s, "base_total_score", 0) or getattr(s, "total_score", 0)), 0, 100)
         out.append({
             "original_rank": idx,
             "code": _norm_code(s.code),
             "name": s.name,
-            "original_score": _sanitize_num(s.total_score, 0, 100),
+            "original_score": base_score,
             "ai_adjusted_score": ai_score,
             "ai_sentiment_score": ai_sent,
             "ai_confidence": ai_conf / 100.0,
             "ai_reasons": ai_reasons,
+              "capital_flow_source": flow_data.get("capital_flow_source", "proxy"),
         })
     reranked = sorted(out, key=lambda x: x["ai_adjusted_score"], reverse=True)
     rank_map = {x["code"]: i + 1 for i, x in enumerate(reranked)}
@@ -220,6 +263,9 @@ async def analyze_top(req: AnalyzeTopRequest, db: Session = Depends(get_db)):
             "ai_sentiment_score": row["ai_sentiment_score"], "ai_confidence": row["ai_confidence"],
             "ai_reasons": json.dumps(row["ai_reasons"], ensure_ascii=False),
             "original_rank": row["original_rank"], "new_rank": row["new_rank"],
+            "ai_adjustment": _sanitize_num(row["ai_adjusted_score"] - row["original_score"], -10, 10),
+            "enhanced_score": row["ai_adjusted_score"],
+            "enhanced_rank": row["new_rank"],
         }
         if es:
             for k, v in payload.items():

@@ -21,8 +21,10 @@ def add_technical_factors(df: pd.DataFrame) -> pd.DataFrame:
 
     roll_250_high = d["close"].rolling(250).max()
     roll_250_low = d["close"].rolling(250).min()
-    denom = (roll_250_high - roll_250_low).replace(0, pd.NA)
-    d["percentile_250d"] = ((d["close"] - roll_250_low) / denom).fillna(0)
+    denom = (roll_250_high - roll_250_low)
+    d["percentile_250d_flat_range"] = denom.fillna(0) == 0
+    denom_safe = denom.replace(0, pd.NA)
+    d["percentile_250d"] = (((d["close"] - roll_250_low) / denom_safe) * 100).fillna(50).clip(0, 100)
 
     d["volatility_20d"] = d["close"].pct_change().rolling(20).std()
     d["volume_ratio_5d"] = d["volume"].rolling(5).mean() / d["volume"].rolling(20).mean()

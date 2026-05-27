@@ -42,6 +42,7 @@ def test_analyze_top_only_top10(monkeypatch):
     assert resp.status_code == 200
     items = resp.json()["items"]
     assert len(items) == 10
+    assert all("capital_flow_source" in x for x in items)
 
 
 def test_analyze_manual_codes_only(monkeypatch):
@@ -74,3 +75,10 @@ def test_analyze_top_rerank_fields(monkeypatch):
     assert resp.status_code == 200
     row = resp.json()["items"][0]
     assert "original_rank" in row and "new_rank" in row
+
+
+def test_capital_flow_proxy_default():
+    class S:
+        capital_flow_source = "proxy"
+    out = agent_routes._fetch_capital_flow_with_cache("000001", "2026-05-27", S())
+    assert out["capital_flow_source"] == "proxy"

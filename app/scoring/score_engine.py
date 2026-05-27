@@ -100,7 +100,8 @@ def compute_score(row: dict) -> dict:
     reasons = []
     dd120 = _safe(row.get("drawdown_from_120d_high", None), -1000, 1000)
     dd250 = _safe(row.get("drawdown_from_250d_high", None), -1000, 1000)
-    pct250 = _safe(row.get("percentile_250d", None), 0, 1)
+    pct250 = _safe(row.get("percentile_250d", None), 0, 100)
+    pct250_flat_range = bool(row.get("percentile_250d_flat_range", False))
     cons_days = _safe(row.get("consolidation_days", None), 0, 250)
     ma_struct = _safe(row.get("ma_structure_score", None), 0, 100)
     d20 = _safe(row.get("distance_to_ma20", 0), -10, 10)
@@ -116,11 +117,11 @@ def compute_score(row: dict) -> dict:
         low_position -= 8
 
     # 250日分位：偏低到中低更优
-    if 0.2 <= pct250 <= 0.5:
+    if 20 <= pct250 <= 50:
         low_position += 20
-    elif pct250 < 0.1:
+    elif pct250 < 10:
         low_position -= 8
-    elif pct250 > 0.75:
+    elif pct250 > 75:
         low_position -= 10
 
     # 横盘充分
@@ -141,8 +142,15 @@ def compute_score(row: dict) -> dict:
         reasons.append("低位风险：均线下方深度运行，疑似纯下跌趋势")
 
     low_position = _safe(low_position)
+    if pct250 >= 80:
+        pos_label = "接近250日高点"
+    elif pct250 <= 20:
+        pos_label = "接近250日低位"
+    else:
+        pos_label = "中位区间"
+    extra = "；区间不足(250日高低点重合，分位按50处理)" if pct250_flat_range else ""
     reasons.append(
-        f"低位状态：250日回撤={dd250:.2%}，250日分位={pct250:.1%}，横盘{int(cons_days)}天，MA结构={ma_struct:.0f}"
+        f"低位状态：250日回撤={dd250:.2%}，250日分位={pct250:.1f}%（{pos_label}），横盘{int(cons_days)}天，MA结构={ma_struct:.0f}{extra}"
     )
 
     r5 = _safe(row.get("stock_return_5d", 0), -10, 10)

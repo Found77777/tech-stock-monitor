@@ -36,6 +36,13 @@ class Settings(BaseSettings):
     llm_model: str = Field(default="gpt-4o-mini")
     agent_news_sources: str = Field(default="sina,eastmoney,xueqiu")
     agent_enabled: bool = Field(default=False)
+    capital_flow_source: str = Field(default="proxy")  # proxy|eastmoney
+    capital_flow_top_n: int = Field(default=10)
+    capital_flow_verify_top_n: int = Field(default=20)
+    capital_flow_sleep_min: float = Field(default=1.5)
+    capital_flow_sleep_max: float = Field(default=3.0)
+    capital_flow_retry: int = Field(default=2)
+    capital_flow_cache_enabled: bool = Field(default=True)
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=False)
 

@@ -181,7 +181,7 @@ def main():
                 ai_df["ai_reasons"] = ai_df["ai_reasons"].map(_format_reasons)
             st.subheader("AI 验证 Top10 结果")
             st.dataframe(
-                ai_df[[c for c in ["original_rank", "new_rank", "code", "name", "original_score", "ai_adjusted_score", "ai_sentiment_score", "ai_confidence", "ai_reasons"] if c in ai_df.columns]],
+                ai_df[[c for c in ["original_rank", "new_rank", "code", "name", "original_score", "ai_adjusted_score", "ai_sentiment_score", "ai_confidence", "capital_flow_source", "ai_reasons"] if c in ai_df.columns]],
                 use_container_width=True,
             )
     daily_market_json, _, _ = fetch(f"{base}/agent/daily-market/latest")

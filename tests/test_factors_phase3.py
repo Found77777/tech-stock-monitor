@@ -21,3 +21,48 @@ def test_low_position_structure_fields_exist():
     out = add_technical_factors(df)
     for c in ["drawdown_from_250d_high", "percentile_250d", "consolidation_days", "ma_structure_score", "trend_reversal_score"]:
         assert c in out.columns
+
+
+def test_percentile_and_drawdown_close_equals_high():
+    close = [100.0] * 249 + [200.0]
+    df = pd.DataFrame({
+        "trade_date": [f"2025-{i:03d}" for i in range(250)],
+        "close": close,
+        "volume": [1000] * 250,
+        "amount": [100000] * 250,
+        "turnover_rate": [1.0] * 250,
+    })
+    out = add_technical_factors(df)
+    last = out.iloc[-1]
+    assert abs(last["drawdown_from_250d_high"]) < 1e-9
+    assert 99.9 <= float(last["percentile_250d"]) <= 100.0
+
+
+def test_percentile_and_drawdown_close_equals_low():
+    close = [200.0] * 249 + [100.0]
+    df = pd.DataFrame({
+        "trade_date": [f"2025-{i:03d}" for i in range(250)],
+        "close": close,
+        "volume": [1000] * 250,
+        "amount": [100000] * 250,
+        "turnover_rate": [1.0] * 250,
+    })
+    out = add_technical_factors(df)
+    last = out.iloc[-1]
+    assert float(last["drawdown_from_250d_high"]) < 0
+    assert 0.0 <= float(last["percentile_250d"]) <= 0.1
+
+
+def test_percentile_flat_range_defaults_to_50():
+    close = [100.0] * 250
+    df = pd.DataFrame({
+        "trade_date": [f"2025-{i:03d}" for i in range(250)],
+        "close": close,
+        "volume": [1000] * 250,
+        "amount": [100000] * 250,
+        "turnover_rate": [1.0] * 250,
+    })
+    out = add_technical_factors(df)
+    last = out.iloc[-1]
+    assert float(last["percentile_250d"]) == 50.0
+    assert bool(last["percentile_250d_flat_range"]) is True
