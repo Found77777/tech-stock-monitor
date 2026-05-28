@@ -113,6 +113,7 @@ class NewsAgent:
             "total_after_dedupe": after,
             "final_return_count": after,
             "debug_reason": reason,
+            "final_news": deduped[:10],
         }
         logger.info("stock_news_aggregate code=%s source_success_counts=%s total_before_dedupe=%s total_after_dedupe=%s final_return_count=%s debug_reason=%s",
                     code, source_success_counts, before, after, after, reason)

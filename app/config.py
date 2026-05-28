@@ -40,9 +40,9 @@ class Settings(BaseSettings):
     capital_flow_source: str = Field(default="proxy")  # proxy|eastmoney
     capital_flow_top_n: int = Field(default=10)
     capital_flow_verify_top_n: int = Field(default=20)
-    capital_flow_sleep_min: float = Field(default=1.5)
-    capital_flow_sleep_max: float = Field(default=3.0)
-    capital_flow_retry: int = Field(default=2)
+    capital_flow_sleep_min: float = Field(default=10.0)
+    capital_flow_sleep_max: float = Field(default=20.0)
+    capital_flow_retry: int = Field(default=3)
     capital_flow_cache_enabled: bool = Field(default=True)
     enable_factor_redundancy_adjustment: bool = Field(default=False)
 

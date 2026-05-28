@@ -129,3 +129,119 @@ def test_infer_akshare_fund_flow_market():
     assert agent_routes.infer_akshare_fund_flow_market("603236") == "sh"
     assert agent_routes.infer_akshare_fund_flow_market("002465") == "sz"
     assert agent_routes.infer_akshare_fund_flow_market("000001") == "sz"
+
+
+class DummyAgentNoAlpha:
+    def __init__(self, settings):
+        pass
+
+    async def fetch_stock_news(self, code):
+        items=[{"title":"板块异动消息","source":"新浪财经","publish_time":"2026-05-27","summary":"无公司级事件","url":"u"} for _ in range(7)]
+        return items,{"final_return_count":7,"final_news":items,"source_success_counts":{"sina":7},"debug_reason":"ok"}
+
+    async def analyze_stocks(self, stock_codes):
+        return []
+
+    async def market_overview(self):
+        return {"market_sentiment":0,"tech_sector_sentiment":0}
+
+
+def test_analyze_top_fetched_news_but_zero_alpha(monkeypatch):
+    _seed_scores(12)
+    monkeypatch.setattr(agent_routes, "NewsAgent", DummyAgentNoAlpha)
+    client = TestClient(app)
+    resp = client.post('/agent/analyze-top', json={"top_n":1,"rerank":True})
+    assert resp.status_code == 200
+    row = resp.json()["items"][0]
+    assert row["fetched_news_count"] == 7
+    assert "未抓取到有效新闻" not in " ".join(row.get("ai_reasons", []))
+    assert row.get("top_news_events")
+
+
+def test_no_news_fallback_message(monkeypatch):
+    class DummyNoNews(DummyAgentNoAlpha):
+        async def fetch_stock_news(self, code):
+            return [],{"final_return_count":0,"final_news":[],"debug_reason":"all_sources_empty"}
+    _seed_scores(12)
+    monkeypatch.setattr(agent_routes, "NewsAgent", DummyNoNews)
+    client = TestClient(app)
+    resp = client.post('/agent/analyze-top', json={"top_n":1,"rerank":True})
+    row = resp.json()["items"][0]
+    assert row["fetched_news_count"] == 0
+    assert any("未抓取到有效新闻" in x for x in row.get("ai_reasons", []))
+
+
+def test_capital_flow_retry_then_success(monkeypatch):
+    calls = {"n": 0}
+
+    class AK:
+        @staticmethod
+        def stock_individual_fund_flow(stock, market):
+            import pandas as pd
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("temp")
+            return pd.DataFrame([{"主力净流入-净额": 12}])
+
+    class S:
+        capital_flow_source = "eastmoney"
+        capital_flow_sleep_min = 0.0
+        capital_flow_sleep_max = 0.0
+        capital_flow_retry = 3
+        capital_flow_cache_enabled = True
+
+    import sys
+    sys.modules["akshare"] = AK
+    agent_routes._CAPITAL_FLOW_CACHE.clear()
+    out = agent_routes._fetch_capital_flow_with_cache("000001", "2026-05-27", S())
+    assert out["capital_flow_source"] == "real_eastmoney"
+    assert out["attempts_used"] == 2
+    assert out["success_attempt"] == 2
+
+
+def test_capital_flow_three_failures():
+    class AK:
+        @staticmethod
+        def stock_individual_fund_flow(stock, market):
+            raise RuntimeError("always fail")
+
+    class S:
+        capital_flow_source = "eastmoney"
+        capital_flow_sleep_min = 0.0
+        capital_flow_sleep_max = 0.0
+        capital_flow_retry = 3
+        capital_flow_cache_enabled = True
+
+    import sys
+    sys.modules["akshare"] = AK
+    agent_routes._CAPITAL_FLOW_CACHE.clear()
+    out = agent_routes._fetch_capital_flow_with_cache("000001", "2026-05-27", S())
+    assert out["capital_flow_source"] == "proxy_fallback"
+    assert out["attempts_used"] == 3
+
+
+def test_capital_flow_cache_and_force_refresh(monkeypatch):
+    calls = {"n": 0}
+
+    class AK:
+        @staticmethod
+        def stock_individual_fund_flow(stock, market):
+            import pandas as pd
+            calls["n"] += 1
+            return pd.DataFrame([{"主力净流入-净额": 1}])
+
+    class S:
+        capital_flow_source = "eastmoney"
+        capital_flow_sleep_min = 0.0
+        capital_flow_sleep_max = 0.0
+        capital_flow_retry = 3
+        capital_flow_cache_enabled = True
+
+    import sys
+    sys.modules["akshare"] = AK
+    agent_routes._CAPITAL_FLOW_CACHE.clear()
+    _ = agent_routes._fetch_capital_flow_with_cache("000001", "2026-05-27", S(), force_refresh=False)
+    _ = agent_routes._fetch_capital_flow_with_cache("000001", "2026-05-27", S(), force_refresh=False)
+    assert calls["n"] == 1
+    _ = agent_routes._fetch_capital_flow_with_cache("000001", "2026-05-27", S(), force_refresh=True)
+    assert calls["n"] == 2

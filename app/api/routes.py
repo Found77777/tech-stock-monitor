@@ -83,8 +83,9 @@ def verification_capital_flow_top(top_n: int = 20, trade_date: str | None = None
     results = []
     fallback_count = 0
     failed_count = 0
+    real_count = 0
     for i, row in enumerate(base_rows, start=1):
-        flow = _fetch_capital_flow_with_cache(row.code, td, s) if not force_refresh else _fetch_capital_flow_with_cache.__wrapped__(row.code, td, s) if hasattr(_fetch_capital_flow_with_cache, "__wrapped__") else _fetch_capital_flow_with_cache(row.code, td, s)
+        flow = _fetch_capital_flow_with_cache(row.code, td, s, force_refresh=force_refresh)
         n5 = _sanitize_num(flow.get("net_inflow_5d", 0), -1e13, 1e13)
         n10 = _sanitize_num(flow.get("net_inflow_10d", 0), -1e13, 1e13)
         pvr_adj = 0.0
@@ -97,6 +98,9 @@ def verification_capital_flow_top(top_n: int = 20, trade_date: str | None = None
         if flow.get("capital_flow_source") == "proxy_fallback":
             adj = max(-2.0, min(2.0, adj))
             fallback_count += 1
+            failed_count += 1
+        elif flow.get("capital_flow_source") == "real_eastmoney":
+            real_count += 1
         cap_score = _sanitize_num(50 + adj * 6, 0, 100)
         enhanced = _sanitize_num(float(row.total_score) + adj + pvr_adj, 0, 100)
         reason = f"资金流来源={flow.get('capital_flow_source','proxy')} 5日/10日={n5:.0f}/{n10:.0f} 连续净流入={'是' if (n5>0 and n10>0) else '否'} 量价背离={'是' if adj<0 else '否'}"
@@ -107,9 +111,11 @@ def verification_capital_flow_top(top_n: int = 20, trade_date: str | None = None
                 setattr(es, k, v)
         else:
             db.add(EnhancedStockScore(**payload))
-        results.append({"code": _norm_code(row.code), "name": row.name, "base_rank": i, "base_total_score": row.total_score, "capital_flow_source": flow.get("capital_flow_source", "proxy"), "capital_flow_adjustment": adj, "enhanced_score": enhanced, "reasons": reason})
+        results.append({"code": _norm_code(row.code), "name": row.name, "base_rank": i, "base_total_score": row.total_score, "capital_flow_source": flow.get("capital_flow_source", "proxy"), "capital_flow_adjustment": adj, "enhanced_score": enhanced, "reasons": reason, "attempts_used": flow.get("attempts_used", 0), "success_attempt": flow.get("success_attempt"), "capital_flow_error_type": flow.get("capital_flow_error_type"), "capital_flow_error_message": flow.get("capital_flow_error_message"), "capital_flow_source_attempted": flow.get("capital_flow_source_attempted", "")})
     db.commit()
-    return {"verified_count": len(results), "fallback_count": fallback_count, "failed_count": failed_count, "results": results}
+    import logging
+    logging.getLogger(__name__).info("capital-flow-top batch verified_count=%s real_count=%s fallback_count=%s failed_count=%s", len(results), real_count, fallback_count, failed_count)
+    return {"verified_count": len(results), "real_count": real_count, "fallback_count": fallback_count, "failed_count": failed_count, "results": results}
 
 
 @router.get("/watchlist/enhanced-top")

@@ -80,16 +80,19 @@ async def analyze_news(req: AnalyzeRequest, db: Session = Depends(get_db)):
         analyses = await agent.analyze_stocks(codes)
         fetched_counts: dict[str, int] = {code: int(fetched_news_count.get(code, 0)) for code in codes}
         by_code = {}
+        llm_parse_status = {}
         for a in analyses:
             c = _norm_code(a.get("stock_code", ""))
             if c:
                 by_code[c] = a
                 fetched_counts[c] = fetched_counts.get(c, 0) + 1
+                llm_parse_status[c] = "ok"
         logger.info("agent fetched news count per stock=%s", fetched_counts)
         logger.info("agent fetched/parsed analysis count=%s", len(by_code))
 
         for code in codes:
             a = by_code.get(code)
+            llm_parse_status.setdefault(code, "parse_failed_or_unmentioned")
             is_fallback = False
             if not a:
                 is_fallback = True
@@ -128,6 +131,7 @@ async def analyze_news(req: AnalyzeRequest, db: Session = Depends(get_db)):
             results["stock_analyses"].append(rec)
         results["fetched_news_count"] = fetched_counts
         results["source_debug"] = source_debug
+        results["llm_parse_status"] = llm_parse_status
         logger.info("agent generated stock analysis count=%s", len(results["stock_analyses"]))
     if req.include_market_overview:
         overview = await agent.market_overview()
@@ -192,38 +196,84 @@ def _calc_ai_adjustment(ai_sentiment: float, ai_conf: float, ai_policy: float, a
     return _sanitize_num(adj, -cap, cap)
 
 
-def _fetch_capital_flow_with_cache(code: str, trade_date: str, settings) -> dict:
+def _fetch_capital_flow_with_cache(code: str, trade_date: str, settings, force_refresh: bool = False) -> dict:
     key = (_norm_code(code), trade_date)
-    if key in _CAPITAL_FLOW_CACHE:
+    cache_enabled = bool(getattr(settings, "capital_flow_cache_enabled", True))
+    if cache_enabled and not force_refresh and key in _CAPITAL_FLOW_CACHE:
         return _CAPITAL_FLOW_CACHE[key]
 
     source = str(getattr(settings, "capital_flow_source", "proxy")).lower()
     if source != "eastmoney":
-        payload = {"capital_flow_source": "proxy", "net_inflow_1d": 0.0, "net_inflow_5d": 0.0, "net_inflow_10d": 0.0}
-        _CAPITAL_FLOW_CACHE[key] = payload
+        payload = {
+            "capital_flow_source": "proxy",
+            "net_inflow_1d": 0.0,
+            "net_inflow_5d": 0.0,
+            "net_inflow_10d": 0.0,
+            "attempts_used": 0,
+            "success_attempt": None,
+            "capital_flow_error_type": None,
+            "capital_flow_error_message": "",
+            "capital_flow_source_attempted": source,
+        }
+        if cache_enabled:
+            _CAPITAL_FLOW_CACHE[key] = payload
         return payload
 
-    sleep_min = float(getattr(settings, "capital_flow_sleep_min", 1.5))
-    sleep_max = float(getattr(settings, "capital_flow_sleep_max", 3.0))
-    for attempt in range(3):  # 1 + 2 retries
+    sleep_min = float(getattr(settings, "capital_flow_sleep_min", 8.0))
+    sleep_max = float(getattr(settings, "capital_flow_sleep_max", 18.0))
+    retry = max(1, int(getattr(settings, "capital_flow_retry", 3)))
+    market = infer_akshare_fund_flow_market(code)
+    last_err_type = None
+    last_err_msg = ""
+
+    for attempt in range(1, retry + 1):
         try:
             import akshare as ak
-            market = infer_akshare_fund_flow_market(code)
-            logger.info("capital flow request fn=stock_individual_fund_flow code=%s inferred_market=%s", _norm_code(code), market)
+            logger.info("capital flow attempt code=%s market=%s attempt=%s status=start", _norm_code(code), market, attempt)
             df = ak.stock_individual_fund_flow(stock=_norm_code(code), market=market)
             if df is None or df.empty:
                 raise ValueError("empty fund flow")
             latest = df.iloc[0]
             n1 = _sanitize_num(latest.get("主力净流入-净额", 0), -1e13, 1e13)
-            payload = {"capital_flow_source": "real_eastmoney", "net_inflow_1d": n1, "net_inflow_5d": 0.0, "net_inflow_10d": 0.0}
-            _CAPITAL_FLOW_CACHE[key] = payload
+            payload = {
+                "capital_flow_source": "real_eastmoney",
+                "net_inflow_1d": n1,
+                "net_inflow_5d": 0.0,
+                "net_inflow_10d": 0.0,
+                "attempts_used": attempt,
+                "success_attempt": attempt,
+                "capital_flow_error_type": None,
+                "capital_flow_error_message": "",
+                "capital_flow_source_attempted": "eastmoney",
+            }
+            logger.info("capital flow attempt code=%s market=%s attempt=%s status=success", _norm_code(code), market, attempt)
+            if cache_enabled:
+                _CAPITAL_FLOW_CACHE[key] = payload
             return payload
         except Exception as exc:
-            logger.warning("capital flow fetch failed code=%s attempt=%s err=%s", code, attempt + 1, exc)
-            if attempt < 2:
-                time.sleep(random.uniform(sleep_min, sleep_max))
-    payload = {"capital_flow_source": "proxy_fallback", "net_inflow_1d": 0.0, "net_inflow_5d": 0.0, "net_inflow_10d": 0.0}
-    _CAPITAL_FLOW_CACHE[key] = payload
+            last_err_type = type(exc).__name__
+            last_err_msg = str(exc)
+            sleep_s = random.uniform(sleep_min, sleep_max) if attempt < retry else 0.0
+            logger.warning(
+                "capital flow attempt code=%s market=%s attempt=%s status=failure sleep_seconds=%.2f error_type=%s error_message=%s",
+                _norm_code(code), market, attempt, sleep_s, last_err_type, last_err_msg,
+            )
+            if attempt < retry:
+                time.sleep(sleep_s)
+
+    payload = {
+        "capital_flow_source": "proxy_fallback",
+        "net_inflow_1d": 0.0,
+        "net_inflow_5d": 0.0,
+        "net_inflow_10d": 0.0,
+        "attempts_used": retry,
+        "success_attempt": None,
+        "capital_flow_error_type": last_err_type,
+        "capital_flow_error_message": last_err_msg,
+        "capital_flow_source_attempted": "eastmoney",
+    }
+    if cache_enabled:
+        _CAPITAL_FLOW_CACHE[key] = payload
     return payload
 
 
@@ -253,6 +303,7 @@ async def analyze_top(req: AnalyzeTopRequest, db: Session = Depends(get_db)):
     analyze_req = AnalyzeRequest(stock_codes=codes, include_market_overview=True)
     analyze_result = await analyze_news(analyze_req, db)
     source_debug = analyze_result.get("source_debug", {}) if isinstance(analyze_result, dict) else {}
+    llm_parse_status_map = analyze_result.get("llm_parse_status", {}) if isinstance(analyze_result, dict) else {}
 
     news_rows = db.query(NewsAnalysis).filter_by(analysis_date=datetime.now().strftime("%Y-%m-%d")).all()
     news_map = { _norm_code(n.stock_code): n for n in news_rows if n.stock_code != "MARKET" }
@@ -267,12 +318,17 @@ async def analyze_top(req: AnalyzeTopRequest, db: Session = Depends(get_db)):
 
         code = _norm_code(s.code)
         stock_debug = source_debug.get(code, {})
+        fetched_news_count = int(stock_debug.get("final_return_count", 0) or 0)
         news_items = list((stock_debug.get("final_news") or []))[:5]
+        if fetched_news_count > 0 and not news_items:
+            news_items = [{"title": "已抓取新闻但结构化失败", "source": "unknown", "publish_time": "", "summary": "", "url": ""}]
         stock_meta = {"code": code, "name": s.name or ""}
         alpha = compute_news_alpha(news_items, stock_meta)
         alpha_adj = _sanitize_num(alpha.get("news_alpha_adjustment", 0), -10, 10)
-        if ai_reasons and any("未抓取到有效新闻" in str(x) for x in ai_reasons):
+        if fetched_news_count == 0 and ai_reasons and any("未抓取到有效新闻" in str(x) for x in ai_reasons):
             alpha_adj = 0.0
+        if fetched_news_count > 0 and ai_reasons and any("未抓取到有效新闻" in str(x) for x in ai_reasons):
+            ai_reasons = ["已抓取新闻，但未识别出高置信alpha事件，暂不调整评分"]
 
         base_total = _sanitize_num(float(getattr(s, "base_total_score", 0) or getattr(s, "total_score", 0)), 0, 100)
         capital_adj = _sanitize_num(float(getattr(s, "capital_flow_adjustment", 0)), -8, 8)
@@ -295,6 +351,24 @@ async def analyze_top(req: AnalyzeTopRequest, db: Session = Depends(get_db)):
                 single_news_alpha=_sanitize_num(ev.get("single_news_alpha", 0), -100, 100),
                 alpha_reasons=json.dumps(ev.get("alpha_reasons", []), ensure_ascii=False),
             ))
+        if fetched_news_count > 0 and not alpha.get("top_news_events"):
+            alpha["top_news_events"] = [
+                {
+                    "title": x.get("title", ""),
+                    "source": x.get("source", ""),
+                    "publish_time": x.get("publish_time", ""),
+                    "event_type": "unknown",
+                    "impact_direction": "neutral",
+                    "relevance_score": 0.0,
+                    "importance_score": 0.0,
+                    "freshness_score": 50.0,
+                    "confidence": 0.0,
+                }
+                for x in news_items[:3]
+            ]
+        if fetched_news_count > 0 and alpha_adj == 0:
+            alpha["news_alpha_summary"] = "已抓取新闻，但未识别出高置信alpha事件（可能为相关性不足/过旧/市场噪音/无公司级事件），暂不调整评分"
+
         out.append({
             "original_rank": idx,
             "code": _norm_code(s.code),
@@ -311,6 +385,9 @@ async def analyze_top(req: AnalyzeTopRequest, db: Session = Depends(get_db)):
             "risk_flags": alpha.get("risk_flags", []),
             "capital_flow_adjustment": capital_adj,
             "capital_flow_source": flow_data.get("capital_flow_source", "proxy"),
+            "fetched_news_count": fetched_news_count,
+            "valid_alpha_event_count": len([e for e in alpha.get("top_news_events", []) if abs(float(e.get("single_news_alpha", 0) or 0)) > 0]),
+            "llm_parse_status": llm_parse_status_map.get(code, "unknown"),
         })
     reranked = sorted(out, key=lambda x: x["ai_adjusted_score"], reverse=True)
     rank_map = {x["code"]: i + 1 for i, x in enumerate(reranked)}
