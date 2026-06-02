@@ -224,7 +224,7 @@ def test_capital_flow_three_failures():
     assert out["capital_flow_is_estimated"] is False
 
 
-def test_capital_flow_eastmoney_fail_allow_proxy(monkeypatch):
+def test_capital_flow_eastmoney_fail_even_allow_proxy_returns_unavailable(monkeypatch):
     class AK:
         @staticmethod
         def stock_individual_fund_flow(stock, market):
@@ -242,9 +242,9 @@ def test_capital_flow_eastmoney_fail_allow_proxy(monkeypatch):
     sys.modules["akshare"] = AK
     agent_routes._CAPITAL_FLOW_CACHE.clear()
     out = agent_routes._fetch_capital_flow_with_cache("000001", "2026-05-27", S())
-    assert out["capital_flow_source"] == "proxy_estimated"
-    assert out["capital_flow_is_estimated"] is True
-    assert out["capital_flow_confidence"] == 30
+    assert out["capital_flow_source"] == "unavailable"
+    assert out["capital_flow_is_estimated"] is False
+    assert out["capital_flow_confidence"] == 0
 
 
 def test_capital_flow_none_source():

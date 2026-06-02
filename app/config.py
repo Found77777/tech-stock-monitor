@@ -20,8 +20,8 @@ class Settings(BaseSettings):
 
     database_url: str = Field(default=f"sqlite:///{BASE_DIR / 'data' / 'tech_monitor.db'}")
 
-    data_source_provider: str = Field(default="efinance")
-    real_data_source: str = Field(default="efinance")
+    data_source_provider: str = Field(default="sina")
+    real_data_source: str = Field(default="sina")
     tushare_token: str = Field(default="")
     sina_user_agent: str | None = Field(default=None)
     sina_cookie: str | None = Field(default=None)
@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     llm_http_proxy: str = Field(default="")
     agent_news_sources: str = Field(default="sina,eastmoney,cninfo,baidu,rss")
     agent_enabled: bool = Field(default=False)
-    capital_flow_source: str = Field(default="eastmoney")  # eastmoney|efinance|proxy|none
+    capital_flow_source: str = Field(default="efinance")  # eastmoney|efinance|proxy|none
     capital_flow_allow_proxy: bool = Field(default=False)
     capital_flow_top_n: int = Field(default=10)
     capital_flow_verify_top_n: int = Field(default=20)

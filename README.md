@@ -121,16 +121,18 @@ NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000 npm run dev
 
 ```bash
 USE_MOCK_DATA=false
-REAL_DATA_SOURCE=efinance
+REAL_DATA_SOURCE=sina
 ENABLE_DATA_SOURCE_FALLBACK=true
 ```
 
-`REAL_DATA_SOURCE` 支持：`efinance`、`sina`、`akshare`、`mock`。推荐 `efinance`；AKShare/EastMoney 在部分网络环境下可能不稳定。开启 fallback 后，行情源按 `efinance -> sina -> mock` 或 `akshare -> efinance -> sina -> mock` 降级，并在接口返回 `data_source_used`。
+`REAL_DATA_SOURCE` 支持：`efinance`、`sina`、`akshare`、`mock`。当前推荐行情/K线使用 `sina`；AKShare/EastMoney 在部分网络环境下可能不稳定。开启 fallback 后，行情源按 `sina -> mock`、`efinance -> sina -> mock` 或 `akshare -> efinance -> sina -> mock` 降级，并在接口返回 `data_source_used`。
+
+推荐配置：Sina 用于行情与K线，efinance `get_history_bill` 用于历史资金流。
 
 资金流配置默认不允许 proxy 静默伪装成真实资金流：
 
 ```bash
-CAPITAL_FLOW_SOURCE=eastmoney
+CAPITAL_FLOW_SOURCE=efinance
 CAPITAL_FLOW_ALLOW_PROXY=false
 CAPITAL_FLOW_RETRY=3
 CAPITAL_FLOW_SLEEP_MIN=10.0
@@ -140,8 +142,9 @@ CAPITAL_FLOW_CACHE_ENABLED=true
 
 资金流状态说明：
 
+- `efinance_history_bill`：真实 efinance `get_history_bill` 历史资金流，`capital_flow_confidence=70`，推荐用于资金流验证。
 - `real_eastmoney`：真实 EastMoney/AKShare 单股资金流，`capital_flow_is_real=true`。
-- `proxy_estimated`：量价估算资金流，不是真实主力资金流；仅当显式 `CAPITAL_FLOW_SOURCE=proxy` 或 `CAPITAL_FLOW_ALLOW_PROXY=true` 时使用，最多影响 ±2 分。
+- `proxy_estimated`：量价估算资金流，不是真实主力资金流；仅当显式 `CAPITAL_FLOW_SOURCE=proxy` 时使用，最多影响 ±2 分。
 - `unavailable`：真实资金流不可用，未使用 proxy 估算，`capital_flow_adjustment=0`。
 - `none`：不启用资金流，`capital_flow_adjustment=0`。
 
@@ -149,9 +152,7 @@ CAPITAL_FLOW_CACHE_ENABLED=true
 
 ```bash
 CAPITAL_FLOW_SOURCE=proxy
-# 或 EastMoney 失败后允许降级：
-CAPITAL_FLOW_SOURCE=eastmoney
-CAPITAL_FLOW_ALLOW_PROXY=true
+# proxy_estimated 不是推荐默认值；仅在明确接受量价估算时启用
 ```
 
 验证命令：

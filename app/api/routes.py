@@ -21,6 +21,28 @@ history_service = HistoryDataService()
 analysis_service = AnalysisService()
 backtest_service = BacktestService()
 
+
+def _capital_flow_adjustment(flow: dict, n5: float, n10: float) -> float:
+    source = flow.get("capital_flow_source", "unavailable")
+    if source == "efinance_history_bill":
+        adj = 0.0
+        net_days_5d = int(flow.get("net_inflow_days_5d", 0) or 0)
+        consecutive_days = int(flow.get("consecutive_net_inflow_days", 0) or 0)
+        if n5 > 0 and n10 > 0:
+            adj += 2.0
+        if net_days_5d >= 3:
+            adj += 1.0
+        if consecutive_days >= 2:
+            adj += 1.0
+        if n5 < 0 and n10 < 0:
+            adj -= 2.0
+        return max(-3.0, min(3.0, adj))
+    if n10 > 0 and n5 > 0:
+        return 6.0
+    if n10 > 0 or n5 > 0:
+        return 3.0
+    return -4.0
+
 @router.get("/", response_model=SystemStatusResponse)
 def root() -> SystemStatusResponse:
     from app.config import get_settings
@@ -89,14 +111,9 @@ def verification_capital_flow_top(top_n: int = 20, trade_date: str | None = None
         n5 = _sanitize_num(flow.get("net_inflow_5d", 0), -1e13, 1e13)
         n10 = _sanitize_num(flow.get("net_inflow_10d", 0), -1e13, 1e13)
         pvr_adj = 0.0
-        if n10 > 0 and n5 > 0:
-            raw_adj = 6.0
-        elif n10 > 0 or n5 > 0:
-            raw_adj = 3.0
-        else:
-            raw_adj = -4.0
+        raw_adj = _capital_flow_adjustment(flow, n5, n10)
         flow_source = flow.get("capital_flow_source", "unavailable")
-        if flow_source == "real_eastmoney":
+        if flow_source in {"real_eastmoney", "efinance_history_bill"}:
             adj = raw_adj
             real_count += 1
         elif flow_source == "proxy_estimated":
@@ -112,8 +129,10 @@ def verification_capital_flow_top(top_n: int = 20, trade_date: str | None = None
         reason = f"资金流来源={flow_source} 置信度={flow.get('capital_flow_confidence',0)} 5日/10日={n5:.0f}/{n10:.0f} 连续净流入={'是' if (n5>0 and n10>0) else '否'}"
         if flow_source == "proxy_estimated":
             reason += "；该资金流为量价估算，不代表真实主力资金流"
+        if flow_source == "efinance_history_bill":
+            reason += f"；efinance历史资金流 5日净流入天数={flow.get('net_inflow_days_5d',0)} 连续净流入天数={flow.get('consecutive_net_inflow_days',0)}"
         if flow_source == "unavailable":
-            reason += "；真实资金流获取失败，未使用proxy估算"
+            reason += "；资金流不可用，本次评分未使用资金流"
         es = db.query(EnhancedStockScore).filter_by(code=row.code, trade_date=td).first()
         payload = dict(code=row.code, name=row.name, trade_date=td, base_rank=i, base_total_score=row.total_score, capital_flow_score=cap_score, capital_flow_source=flow_source, capital_flow_adjustment=adj, ai_adjustment=0.0, enhanced_score=enhanced, enhanced_rank=i, reasons=reason, ai_adjusted_score=enhanced, ai_sentiment_score=0.0, ai_confidence=0.0, ai_reasons="[]", original_rank=i, new_rank=i)
         if es:

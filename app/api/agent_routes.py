@@ -18,6 +18,7 @@ from app.agent.news_agent import NewsAgent
 from app.agent.news_alpha_engine import compute_news_alpha
 from app.agent.sentiment_scorer import merge_market_overview, score_from_analysis
 from app.config import get_settings
+from app.data_sources.efinance_capital_flow import fetch_efinance_history_bill
 from app.database import get_db
 from app.models import DailyBar, DailyMarketIntelligence, EnhancedStockScore, NewsAlphaSignal, NewsAnalysis, StockScore
 
@@ -224,6 +225,8 @@ def _capital_flow_meta(source: str, error_type: str | None = None, error_message
     source = str(source or "unavailable")
     if source == "real_eastmoney":
         return {"capital_flow_source": source, "capital_flow_confidence": 80, "capital_flow_is_real": True, "capital_flow_is_estimated": False, "capital_flow_error_type": error_type, "capital_flow_error_message": error_message, "capital_flow_source_attempted": attempted or "eastmoney"}
+    if source == "efinance_history_bill":
+        return {"capital_flow_source": source, "capital_flow_confidence": 70, "capital_flow_is_real": True, "capital_flow_is_estimated": False, "capital_flow_error_type": error_type, "capital_flow_error_message": error_message, "capital_flow_source_attempted": attempted or "efinance"}
     if source == "efinance":
         return {"capital_flow_source": source, "capital_flow_confidence": 60, "capital_flow_is_real": False, "capital_flow_is_estimated": False, "capital_flow_error_type": error_type, "capital_flow_error_message": error_message, "capital_flow_source_attempted": attempted or "efinance"}
     if source == "proxy_estimated":
@@ -263,8 +266,6 @@ def _fetch_capital_flow_with_cache(code: str, trade_date: str, settings, force_r
         return _CAPITAL_FLOW_CACHE[key]
 
     source = str(getattr(settings, "capital_flow_source", "eastmoney")).lower()
-    allow_proxy = bool(getattr(settings, "capital_flow_allow_proxy", False))
-
     if source == "none":
         payload = {"net_inflow_1d": 0.0, "net_inflow_5d": 0.0, "net_inflow_10d": 0.0, "attempts_used": 0, "success_attempt": None, **_capital_flow_meta("none")}
         if cache_enabled:
@@ -276,7 +277,17 @@ def _fetch_capital_flow_with_cache(code: str, trade_date: str, settings, force_r
             _CAPITAL_FLOW_CACHE[key] = payload
         return payload
     if source == "efinance":
-        payload = _unavailable_capital_flow_payload("efinance", "NotImplementedError", "efinance资金流暂未接入真实资金流字段，未使用proxy估算")
+        try:
+            metrics = fetch_efinance_history_bill(code)
+            payload = {
+                **metrics,
+                "attempts_used": 1,
+                "success_attempt": 1,
+                **_capital_flow_meta("efinance_history_bill"),
+            }
+        except Exception as exc:
+            logger.warning("efinance history bill failed code=%s error_type=%s error_message=%s", _norm_code(code), type(exc).__name__, exc)
+            payload = _unavailable_capital_flow_payload("efinance", type(exc).__name__, str(exc), attempts_used=1)
         if cache_enabled:
             _CAPITAL_FLOW_CACHE[key] = payload
         return payload
@@ -325,11 +336,7 @@ def _fetch_capital_flow_with_cache(code: str, trade_date: str, settings, force_r
             if attempt < retry:
                 time.sleep(sleep_s)
 
-    if allow_proxy:
-        payload = _proxy_capital_flow_payload(attempted="eastmoney", error_type=last_err_type, error_message=last_err_msg)
-        payload["attempts_used"] = retry
-    else:
-        payload = _unavailable_capital_flow_payload("eastmoney", last_err_type, f"真实资金流获取失败，未使用proxy估算: {last_err_msg}", attempts_used=retry)
+    payload = _unavailable_capital_flow_payload("eastmoney", last_err_type, f"真实资金流获取失败，未使用proxy估算: {last_err_msg}", attempts_used=retry)
     if cache_enabled:
         _CAPITAL_FLOW_CACHE[key] = payload
     return payload
