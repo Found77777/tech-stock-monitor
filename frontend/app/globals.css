@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 222 47% 5%;
+    --foreground: 210 40% 98%;
+    --card: 222 47% 7%;
+    --card-foreground: 210 40% 98%;
+    --primary: 168 76% 42%;
+    --primary-foreground: 222 47% 5%;
+    --secondary: 217 33% 17%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217 33% 13%;
+    --muted-foreground: 215 20% 65%;
+    --accent: 217 33% 16%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217 33% 18%;
+    --input: 217 33% 18%;
+    --ring: 168 76% 42%;
+    --radius: 0.75rem;
+  }
+  * { @apply border-border; }
+  body { @apply bg-background text-foreground antialiased; }
+  ::selection { @apply bg-primary/30 text-white; }
+}
+
+.trader-grid {
+  background-image: linear-gradient(rgba(20,184,166,0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(20,184,166,0.06) 1px, transparent 1px);
+  background-size: 28px 28px;
+  background-color: #020617;
+}
