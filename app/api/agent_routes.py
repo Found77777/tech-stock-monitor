@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import random
+import re
 import time
 from datetime import datetime
 
@@ -108,7 +109,6 @@ async def analyze_news(req: AnalyzeRequest, db: Session = Depends(get_db)):
             c = _norm_code(a.get("stock_code", ""))
             if c:
                 by_code[c] = a
-                fetched_counts[c] = fetched_counts.get(c, 0) + 1
                 llm_parse_status[c] = "ok"
         logger.info("agent fetched news count per stock=%s", fetched_counts)
         logger.info("agent fetched/parsed analysis count=%s", len(by_code))
@@ -117,33 +117,36 @@ async def analyze_news(req: AnalyzeRequest, db: Session = Depends(get_db)):
             a = by_code.get(code)
             llm_parse_status.setdefault(code, "parse_failed_or_unmentioned")
             is_fallback = False
+            stock_debug = source_debug.get(code, {})
+            stock_news = list((stock_debug.get("final_news") or []))
             if not a:
                 is_fallback = True
-                a = {
-                    "stock_code": code,
-                    "policy_sentiment": 0,
-                    "fundamental_event_score": 0,
-                    "industry_momentum": 0,
-                    "market_buzz_score": 0,
-                    "market_buzz_direction": 0,
-                    "macro_impact": 0,
-                    "composite_sentiment": 0,
-                    "confidence": 0,
-                    "risk_flags": ["未抓取到有效新闻，暂不调整评分"],
-                    "key_events": [],
-                    "summary": "未抓取到有效新闻，暂不调整评分",
-                }
-            if is_fallback:
-                scored = {
-                    "ai_sentiment_score": 0.0,
-                    "ai_confidence": 0.0,
-                    "ai_policy_boost": 0.0,
-                    "ai_fundamental_boost": 0.0,
-                    "ai_risk_flags": ["未抓取到有效新闻，暂不调整评分"],
-                    "ai_reasons": ["未抓取到有效新闻，暂不调整评分"],
-                }
-            else:
-                scored = score_from_analysis(a)
+                if stock_news:
+                    text = " ".join(f"{x.get('title','')} {x.get('summary','')}" for x in stock_news[:5])
+                    pos = sum(text.count(w) for w in ["中标", "订单", "预增", "突破", "利好", "签约", "政策", "补贴"])
+                    neg = sum(text.count(w) for w in ["处罚", "减持", "诉讼", "预亏", "下修", "风险", "亏损"])
+                    composite = max(-60, min(60, (pos - neg) * 18))
+                    a = {
+                        "stock_code": code, "policy_sentiment": 20 if "政策" in text or "补贴" in text else 0,
+                        "fundamental_event_score": max(-60, min(60, (pos - neg) * 15)), "industry_momentum": 0,
+                        "market_buzz_score": min(100, len(stock_news) * 10), "market_buzz_direction": composite,
+                        "macro_impact": 0, "composite_sentiment": composite, "confidence": 25,
+                        "risk_flags": [w for w in ["处罚", "减持", "诉讼", "预亏", "下修", "风险", "亏损"] if w in text][:3],
+                        "key_events": [x.get("title", "") for x in stock_news[:3] if x.get("title")],
+                        "summary": "DeepSeek未返回该股票结构化结果，已基于已抓取新闻动态兜底", "llm_fallback": True,
+                    }
+                else:
+                    a = {
+                        "stock_code": code, "policy_sentiment": 0, "fundamental_event_score": 0, "industry_momentum": 0,
+                        "market_buzz_score": 0, "market_buzz_direction": 0, "macro_impact": 0, "composite_sentiment": 0,
+                        "confidence": 0, "risk_flags": ["未抓取到有效新闻，暂不调整评分"], "key_events": [],
+                        "summary": "未抓取到有效新闻，暂不调整评分",
+                    }
+            a["_news_items"] = stock_news
+            a["_fetched_news_count"] = int(fetched_news_count.get(code, 0) or len(stock_news))
+            a["_source_success_counts"] = stock_debug.get("source_success_counts", {})
+            a["_llm_status"] = getattr(agent, "last_llm_status", "unknown")
+            scored = score_from_analysis(a)
             rec = {
                 "stock_code": code, "analysis_date": datetime.now().strftime("%Y-%m-%d"),
                 "raw_analysis": json.dumps(a, ensure_ascii=False), "ai_sentiment_score": scored["ai_sentiment_score"],
@@ -280,10 +283,12 @@ def _fetch_capital_flow_with_cache(code: str, trade_date: str, settings, force_r
         try:
             metrics = fetch_efinance_history_bill(code)
             payload = {
+                **_capital_flow_meta("efinance_history_bill"),
                 **metrics,
                 "attempts_used": 1,
                 "success_attempt": 1,
-                **_capital_flow_meta("efinance_history_bill"),
+                "capital_flow_error_type": None,
+                "capital_flow_error_message": None,
             }
         except Exception as exc:
             logger.warning("efinance history bill failed code=%s error_type=%s error_message=%s", _norm_code(code), type(exc).__name__, exc)
@@ -403,6 +408,16 @@ async def analyze_top(req: AnalyzeTopRequest, db: Session = Depends(get_db)):
         # Reuse Layer 2 metadata when present; otherwise mark capital flow as not verified.
         flow_source = str(getattr(s, "capital_flow_source", "not_verified") or "not_verified")
         flow_meta = _capital_flow_meta(flow_source)
+        reason_text = str(getattr(s, "reasons", "") or "")
+        conf_match = re.search(r"置信度=([0-9.]+)", reason_text)
+        capital_flow_confidence = flow_meta["capital_flow_confidence"]
+        if conf_match:
+            capital_flow_confidence = _sanitize_num(conf_match.group(1), 0, 100)
+        flow_reason = ""
+        for part in reason_text.split("；"):
+            if "最近10日净流入" in part or "资金趋势" in part:
+                flow_reason = part.strip()
+                break
         base_score = base_total
 
         # persist per-news alpha details
@@ -444,7 +459,9 @@ async def analyze_top(req: AnalyzeTopRequest, db: Session = Depends(get_db)):
             "original_score": base_score,
             "ai_adjusted_score": ai_score,
             "ai_sentiment_score": ai_sent,
-            "ai_confidence": alpha.get("confidence", 0.0),
+            "ai_confidence": ai_conf,
+            "ai_reason_summary": ai_reasons[0] if ai_reasons else alpha.get("news_alpha_summary", ""),
+            "confidence": ai_conf,
             "ai_reasons": ai_reasons,
             "ai_adjustment": alpha_adj,
             "news_alpha_adjustment": alpha_adj,
@@ -453,7 +470,8 @@ async def analyze_top(req: AnalyzeTopRequest, db: Session = Depends(get_db)):
             "risk_flags": alpha.get("risk_flags", []),
             "capital_flow_adjustment": capital_adj,
             "capital_flow_source": flow_source,
-            "capital_flow_confidence": flow_meta["capital_flow_confidence"],
+            "capital_flow_confidence": capital_flow_confidence,
+            "capital_flow_reason": flow_reason,
             "capital_flow_is_real": flow_meta["capital_flow_is_real"],
             "capital_flow_is_estimated": flow_meta["capital_flow_is_estimated"],
             "fetched_news_count": fetched_news_count,

@@ -11,9 +11,9 @@ export function SourceBadge({ source }: { source?: string }) {
   return <StatusBadge tone="neutral" label={source || "unknown"} />;
 }
 
-export function SourceNotice({ source }: { source?: string }) {
+export function SourceNotice({ source, confidence, reason }: { source?: string; confidence?: number; reason?: string }) {
   if (source === "proxy_estimated") return <div className="mt-1 text-xs text-orange-200">该资金流为量价估算，不代表真实主力资金流。</div>;
-  if (source === "efinance_history_bill") return <div className="mt-1 text-xs text-cyan-200">capital_flow_confidence=70</div>;
+  if (source === "efinance_history_bill") return <div className="mt-1 text-xs text-cyan-200">Confidence: {confidence ?? "-"}%{reason ? <><br />{reason}</> : null}</div>;
   if (source === "unavailable") return <div className="mt-1 text-xs text-red-200">资金流不可用，本次评分未使用资金流。</div>;
   return null;
 }

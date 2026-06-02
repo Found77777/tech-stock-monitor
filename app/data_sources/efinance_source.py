@@ -73,13 +73,18 @@ class EFinanceDataSource(BaseDataSource):
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
         return df[["code", "name", "price", "pct_change", "change", "volume", "amount", "turnover_rate", "pe", "pb", "total_market_cap", "float_market_cap"]].copy()
 
-    def fetch_daily_bars(self, code: str, start_date: str, end_date: str) -> pd.DataFrame:
+    def get_history(self, code: str, beg: str, end: str) -> pd.DataFrame:
+        """Fetch quote history using efinance get_quote_history and normalize fields."""
         import efinance as ef
 
         norm = _norm_code(code)
+        raw = ef.stock.get_quote_history(norm, beg=beg.replace("-", ""), end=end.replace("-", ""))
+        return self.normalize_history_df(raw, norm)
+
+    def fetch_daily_bars(self, code: str, start_date: str, end_date: str) -> pd.DataFrame:
+        norm = _norm_code(code)
         try:
-            raw = ef.stock.get_quote_history(norm, beg=start_date.replace("-", ""), end=end_date.replace("-", ""))
-            return self.normalize_history_df(raw, norm)
+            return self.get_history(norm, beg=start_date, end=end_date)
         except Exception as exc:
             logger.warning("efinance history failed code=%s err=%s", norm, exc)
             return pd.DataFrame(columns=["code", "name", "trade_date", "open", "high", "low", "close", "volume", "amount", "pct_change", "turnover_rate"])

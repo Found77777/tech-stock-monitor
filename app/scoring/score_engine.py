@@ -223,6 +223,13 @@ def compute_score(row: dict) -> dict:
     overheat = _safe(overheat)
 
     liquidity = _safe(row.get("liquidity_score", 0))
+    avg_amount_20d = _safe(row.get("avg_amount_20d", 0), 0, 1e15)
+    try:
+        avg_turnover_raw = float(row.get("avg_turnover_20d"))
+        avg_turnover_text = f"{avg_turnover_raw:.2f}%" if not math.isnan(avg_turnover_raw) and not math.isinf(avg_turnover_raw) else "N/A"
+    except Exception:
+        avg_turnover_text = "N/A"
+    amount_estimated_note = "；成交额由 close*volume*100 估算" if bool(row.get("amount_estimated", False)) else ""
     # --- AI Agent sentiment integration ---
     ai_data = row.get("_ai_analysis", {})
     ai_sentiment = _safe(ai_data.get("ai_sentiment_score", 50), 0, 100)
@@ -258,6 +265,7 @@ def compute_score(row: dict) -> dict:
         f"主题相关性：theme_relevance_score={theme_eval.get('theme_relevance_score',0):.0f} 研发={theme_eval.get('research_strength_score',0):.0f} 创新={theme_eval.get('innovation_score',0):.0f} 产业地位={theme_eval.get('industry_position_score',0):.0f}",
         f"政策匹配：{theme if theme else '缺失'}（{policy:.0f}分） 纯度={theme_eval.get('purity_score',0):.0f}（惩罚{concept_penalty:.0f}）",
         f"资金/量能：{cap_reason}（capital_flow_score={cap:.0f}分）",
+        f"流动性：avg_amount_20d={avg_amount_20d:.0f}，avg_turnover_20d={avg_turnover_text}{amount_estimated_note}（liquidity_score={liquidity:.0f}分）",
         f"趋势恢复：trend_reversal_score={trend:.0f}，MA20斜率={ma20_slope:.2%}，MA60斜率={ma60_slope:.2%}",
         f"近期强度：recent_strength_score={recent_strength:.0f}（5日={r5:.2%}，10日={r10:.2%}，相对行业={rr:.2%}）",
         "MA结构恢复：关注 MA20/MA60/MA120 方向一致性",

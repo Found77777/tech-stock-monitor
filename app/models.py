@@ -83,7 +83,7 @@ class NewsAnalysis(Base):
     stock_code = Column(String(20), index=True, nullable=False)
     analysis_date = Column(String(16), index=True, nullable=False)
     raw_analysis = Column(Text, nullable=True)
-    ai_sentiment_score = Column(Float, nullable=False, default=50.0)
+    ai_sentiment_score = Column(Float, nullable=False, default=0.0)
     ai_confidence = Column(Float, nullable=False, default=0.0)
     ai_policy_boost = Column(Float, nullable=False, default=0.0)
     ai_fundamental_boost = Column(Float, nullable=False, default=0.0)

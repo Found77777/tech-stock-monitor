@@ -27,7 +27,7 @@ def test_agent_analyze_fallback_per_code(monkeypatch):
     assert len(data["stock_analyses"]) == 1
     row = data["stock_analyses"][0]
     assert row["stock_code"] == "002456"
-    assert row["ai_sentiment_score"] == 0
+    assert row["ai_sentiment_score"] == 50
 
     latest = client.get("/agent/latest")
     assert latest.status_code == 200

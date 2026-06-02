@@ -24,9 +24,10 @@ def test_history_source_has_name():
     assert name == 'mock'
 
 
-def test_history_source_selects_sina_from_env():
+def test_history_source_selects_configured_history_source_from_env():
     os.environ['USE_MOCK_DATA'] = 'false'
     os.environ['REAL_DATA_SOURCE'] = 'sina'
+    os.environ['HISTORY_DATA_SOURCE'] = 'sina'
     get_settings.cache_clear()
     svc = HistoryDataService()
     source, name = svc._resolve_source()

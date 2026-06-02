@@ -1,4 +1,7 @@
 """HTTP API routes."""
+import json
+import re
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import desc, func
 from sqlalchemy.orm import Session
@@ -21,6 +24,37 @@ history_service = HistoryDataService()
 analysis_service = AnalysisService()
 backtest_service = BacktestService()
 
+
+
+
+def _extract_capital_flow_confidence(reason: str, default: float) -> float:
+    match = re.search(r"置信度=([0-9]+(?:\.[0-9]+)?)", str(reason or ""))
+    if match:
+        return _sanitize_num(match.group(1), 0, 100)
+    return default
+
+
+
+
+def _extract_ai_reason_summary(ai_reasons: str | None) -> str:
+    if not ai_reasons:
+        return ""
+    try:
+        parsed = json.loads(ai_reasons)
+        if isinstance(parsed, list) and parsed:
+            return str(parsed[0])
+        if isinstance(parsed, str):
+            return parsed
+    except Exception:
+        pass
+    return str(ai_reasons)
+
+def _extract_capital_flow_reason(reason: str) -> str:
+    parts = [x.strip() for x in str(reason or "").split("；") if x.strip()]
+    for part in parts:
+        if "最近10日净流入" in part or "资金趋势" in part:
+            return part
+    return ""
 
 def _capital_flow_adjustment(flow: dict, n5: float, n10: float) -> float:
     source = flow.get("capital_flow_source", "unavailable")
@@ -127,6 +161,8 @@ def verification_capital_flow_top(top_n: int = 20, trade_date: str | None = None
         cap_score = _sanitize_num(50 + adj * 6, 0, 100)
         enhanced = _sanitize_num(float(row.total_score) + adj + pvr_adj, 0, 100)
         reason = f"资金流来源={flow_source} 置信度={flow.get('capital_flow_confidence',0)} 5日/10日={n5:.0f}/{n10:.0f} 连续净流入={'是' if (n5>0 and n10>0) else '否'}"
+        if flow.get("capital_flow_reason"):
+            reason += f"；{flow.get('capital_flow_reason')}"
         if flow_source == "proxy_estimated":
             reason += "；该资金流为量价估算，不代表真实主力资金流"
         if flow_source == "efinance_history_bill":
@@ -140,7 +176,7 @@ def verification_capital_flow_top(top_n: int = 20, trade_date: str | None = None
                 setattr(es, k, v)
         else:
             db.add(EnhancedStockScore(**payload))
-        results.append({"code": _norm_code(row.code), "name": row.name, "base_rank": i, "base_total_score": row.total_score, "capital_flow_source": flow_source, "capital_flow_confidence": flow.get("capital_flow_confidence", 0), "capital_flow_is_real": flow.get("capital_flow_is_real", False), "capital_flow_is_estimated": flow.get("capital_flow_is_estimated", False), "capital_flow_adjustment": adj, "enhanced_score": enhanced, "reasons": reason, "attempts_used": flow.get("attempts_used", 0), "success_attempt": flow.get("success_attempt"), "capital_flow_error_type": flow.get("capital_flow_error_type"), "capital_flow_error_message": flow.get("capital_flow_error_message"), "capital_flow_source_attempted": flow.get("capital_flow_source_attempted", "")})
+        results.append({"code": _norm_code(row.code), "name": row.name, "base_rank": i, "base_total_score": row.total_score, "capital_flow_source": flow_source, "capital_flow_confidence": flow.get("capital_flow_confidence", 0), "source_confidence": flow.get("source_confidence"), "data_confidence": flow.get("data_confidence"), "capital_flow_reason": flow.get("capital_flow_reason", ""), "capital_flow_is_real": flow.get("capital_flow_is_real", False), "capital_flow_is_estimated": flow.get("capital_flow_is_estimated", False), "capital_flow_adjustment": adj, "enhanced_score": enhanced, "reasons": reason, "attempts_used": flow.get("attempts_used", 0), "success_attempt": flow.get("success_attempt"), "capital_flow_error_type": flow.get("capital_flow_error_type"), "capital_flow_error_message": flow.get("capital_flow_error_message"), "capital_flow_source_attempted": flow.get("capital_flow_source_attempted", "")})
     db.commit()
     import logging
     logging.getLogger(__name__).info("capital-flow-top batch verified_count=%s real_count=%s fallback_count=%s failed_count=%s", len(results), real_count, fallback_count, failed_count)
@@ -158,7 +194,9 @@ def watchlist_enhanced_top(limit: int = 20, db: Session = Depends(get_db)):
         if str(r.name).startswith("N000"):
             continue
         meta = _capital_flow_meta(r.capital_flow_source)
-        out.append({"enhanced_rank": r.enhanced_rank or r.new_rank, "code": _norm_code(r.code), "name": r.name, "base_rank": r.base_rank or r.original_rank, "base_total_score": r.base_total_score, "capital_flow_score": r.capital_flow_score, "capital_flow_source": r.capital_flow_source, "capital_flow_confidence": meta["capital_flow_confidence"], "capital_flow_is_real": meta["capital_flow_is_real"], "capital_flow_is_estimated": meta["capital_flow_is_estimated"], "capital_flow_adjustment": r.capital_flow_adjustment, "ai_adjustment": r.ai_adjustment, "enhanced_score": r.enhanced_score or r.ai_adjusted_score, "reasons": r.reasons or "", "ai_reasons": r.ai_reasons})
+        dynamic_conf = _extract_capital_flow_confidence(r.reasons or "", meta["capital_flow_confidence"])
+        flow_reason = _extract_capital_flow_reason(r.reasons or "")
+        out.append({"enhanced_rank": r.enhanced_rank or r.new_rank, "code": _norm_code(r.code), "name": r.name, "base_rank": r.base_rank or r.original_rank, "base_total_score": r.base_total_score, "capital_flow_score": r.capital_flow_score, "capital_flow_source": r.capital_flow_source, "capital_flow_confidence": dynamic_conf, "capital_flow_reason": flow_reason, "capital_flow_is_real": meta["capital_flow_is_real"], "capital_flow_is_estimated": meta["capital_flow_is_estimated"], "capital_flow_adjustment": r.capital_flow_adjustment, "ai_adjustment": r.ai_adjustment, "enhanced_score": r.enhanced_score or r.ai_adjusted_score, "ai_sentiment_score": r.ai_sentiment_score, "ai_confidence": r.ai_confidence, "ai_reason_summary": _extract_ai_reason_summary(r.ai_reasons), "reasons": r.reasons or "", "ai_reasons": r.ai_reasons})
     return sanitize_for_json(out)
 
 @router.post("/backtest/factor-ic")

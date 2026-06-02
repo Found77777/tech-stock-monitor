@@ -36,13 +36,14 @@ export function WatchlistTable({ rows, enhanced = false }: { rows: WatchlistItem
       <Table>
         <THead className="sticky top-0 z-10 bg-slate-950/95 backdrop-blur">
           <TR className="hover:bg-transparent">
-            <TH>Rank</TH><TH>Code</TH><TH>Name</TH><TH>Base</TH><TH>Flow Adj</TH><TH>Flow Source</TH><TH>News Alpha</TH><TH>Enhanced</TH>{enhanced && <TH>Details</TH>}
+            <TH>Rank</TH><TH>Code</TH><TH>Name</TH><TH>Base</TH><TH>Flow Adj</TH><TH>Flow Source</TH><TH>AI Sentiment</TH><TH>News Alpha</TH><TH>Enhanced</TH>{enhanced && <TH>Details</TH>}
           </TR>
         </THead>
         <TBody>
           {rows.map((r, i) => {
             const rank = Number(r.enhanced_rank || r.rank || i + 1);
             const reasons = parseReasons(r.ai_reasons || r.reasons);
+            if (r.ai_reason_summary && !reasons.includes(r.ai_reason_summary)) reasons.unshift(`AI评分依据：${r.ai_reason_summary}`);
             const events = r.top_news_events || [];
             const key = `${r.code}-${i}`;
             const score = Number(r.enhanced_score || 0);
@@ -53,7 +54,8 @@ export function WatchlistTable({ rows, enhanced = false }: { rows: WatchlistItem
                 <TD className="font-medium text-slate-100">{r.name || "-"}</TD>
                 <TD><ScoreBar value={Number(r.base_total_score ?? r.total_score ?? 0)} compact /></TD>
                 <TD className={Number(r.capital_flow_adjustment || 0) >= 0 ? "font-mono text-emerald-300" : "font-mono text-red-300"}>{formatNumber(r.capital_flow_adjustment)}</TD>
-                <TD><SourceBadge source={r.capital_flow_source} /><SourceNotice source={r.capital_flow_source} /></TD>
+                <TD><SourceBadge source={r.capital_flow_source} /><SourceNotice source={r.capital_flow_source} confidence={r.capital_flow_confidence} reason={r.capital_flow_reason} /></TD>
+                <TD><div className="font-mono text-cyan-100">{formatNumber(r.ai_sentiment_score, 0)}/100</div><div className="text-xs text-slate-500">Conf {formatNumber(r.ai_confidence, 0)}%</div></TD>
                 <TD className={Number(r.news_alpha_adjustment ?? r.ai_adjustment ?? 0) >= 0 ? "font-mono text-emerald-300" : "font-mono text-red-300"}>{formatNumber(r.news_alpha_adjustment ?? r.ai_adjustment)}</TD>
                 <TD><div className={cn("font-mono text-lg font-semibold", score >= 75 ? "text-emerald-300" : score >= 55 ? "text-cyan-200" : score >= 35 ? "text-yellow-200" : "text-red-300")}>{formatNumber(score)}</div></TD>
                 {enhanced && <TD className="min-w-[280px] max-w-lg">

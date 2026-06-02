@@ -37,7 +37,9 @@ def test_get_history_bill_success_returns_efinance_history_bill(monkeypatch):
     monkeypatch.setattr(agent_routes, "fetch_efinance_history_bill", lambda code: normalize_history_bill(_history_bill([1, 2, -1, 3, 4, 5, 6, 7, 8, 9]), code))
     out = agent_routes._fetch_capital_flow_with_cache("600850", "2026-05-27", EFinanceSettings())
     assert out["capital_flow_source"] == "efinance_history_bill"
-    assert out["capital_flow_confidence"] == 70
+    assert 55 <= out["capital_flow_confidence"] <= 95
+    assert out["data_confidence"] != out["source_confidence"]
+    assert "资金趋势" in out["capital_flow_reason"]
     assert out["capital_flow_is_real"] is True
     assert out["capital_flow_is_estimated"] is False
     assert out["net_inflow_5d"] == 35

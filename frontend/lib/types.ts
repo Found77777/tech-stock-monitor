@@ -19,6 +19,10 @@ export type WatchlistItem = {
   capital_flow_is_estimated?: boolean;
   capital_flow_error_type?: string | null;
   capital_flow_error_message?: string | null;
+  capital_flow_reason?: string;
+  ai_sentiment_score?: number;
+  ai_confidence?: number;
+  ai_reason_summary?: string;
   news_alpha_adjustment?: number;
   ai_adjustment?: number;
   enhanced_score?: number;

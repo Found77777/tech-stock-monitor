@@ -107,23 +107,57 @@ def normalize_history_bill(raw_df: pd.DataFrame, code: str) -> dict:
     recent = tail10.iloc[-1]
     values_desc = list(reversed(tail10["_main_net_inflow"].tolist()))
     consecutive = 0
+    consecutive_out = 0
     for value in values_desc:
         if value > 0:
             consecutive += 1
+        else:
+            break
+    for value in values_desc:
+        if value < 0:
+            consecutive_out += 1
         else:
             break
     n5 = float(tail5["_main_net_inflow"].sum())
     n10 = float(tail10["_main_net_inflow"].sum())
     p5 = int((tail5["_main_net_inflow"] > 0).sum())
     p10 = int((tail10["_main_net_inflow"] > 0).sum())
+    y = tail10["_main_net_inflow"].astype(float).tolist()
+    if len(y) >= 2:
+        x_mean = (len(y) - 1) / 2
+        y_mean = sum(y) / len(y)
+        denom = sum((i - x_mean) ** 2 for i in range(len(y))) or 1.0
+        slope = sum((i - x_mean) * (v - y_mean) for i, v in enumerate(y)) / denom
+    else:
+        slope = 0.0
+    valid_ratio = float(df["_main_net_inflow"].notna().mean()) if len(df) else 0.0
+    rows_score = min(30.0, len(tail10) / 10.0 * 30.0)
+    field_score = 30.0 * valid_ratio
+    freshness_score = 10.0
+    if date_col and "_date" in df.columns and pd.notna(df["_date"].iloc[-1]):
+        days = max((pd.Timestamp.now().normalize() - df["_date"].iloc[-1].normalize()).days, 0)
+        freshness_score = 20.0 if days <= 3 else (14.0 if days <= 10 else 8.0 if days <= 30 else 3.0)
+    max_abs = max((abs(v) for v in y), default=0.0)
+    anomaly_score = 20.0 if max_abs <= 5e10 else (10.0 if max_abs <= 2e11 else 3.0)
+    data_confidence = max(0.0, min(100.0, rows_score + field_score + freshness_score + anomaly_score))
+    source_confidence = 70.0
+    capital_flow_confidence = round(0.4 * source_confidence + 0.6 * data_confidence, 2)
+    trend_label = "向上" if slope > 0 else ("向下" if slope < 0 else "平稳")
+    reason = f"最近10日净流入{n10/100000000:.2f}亿元，最近5日净流入{n5/100000000:.2f}亿元，连续净流入{consecutive}天，连续净流出{consecutive_out}天，资金趋势{trend_label}"
     return {
         "stock_code": norm,
         "net_inflow_1d": float(recent["_main_net_inflow"]),
         "net_inflow_5d": n5,
         "net_inflow_10d": n10,
         "consecutive_net_inflow_days": int(consecutive),
+        "consecutive_net_outflow_days": int(consecutive_out),
         "net_inflow_days_5d": p5,
         "net_inflow_days_10d": p10,
+        "capital_flow_trend_slope": float(slope),
+        "source_confidence": source_confidence,
+        "data_confidence": round(data_confidence, 2),
+        "capital_flow_confidence": capital_flow_confidence,
+        "capital_flow_reason": reason,
         "history_bill_rows": int(len(df)),
     }
 

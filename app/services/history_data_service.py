@@ -8,7 +8,7 @@ from app.config import get_settings
 from app.data_sources.akshare_source import AKShareDataSource
 from app.data_sources.base import BaseDataSource
 from app.data_sources.mock_source import MockDataSource
-from app.data_sources.provider import build_data_source, fallback_chain, primary_source_name
+from app.data_sources.provider import build_data_source, primary_source_name
 from app.data_sources.pytdx_source import PytdxDataSource
 from app.data_sources.sina_source import SinaDataSource
 from app.models import DailyBar, StockSnapshot
@@ -19,6 +19,60 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _history_source_name() -> str:
+    settings = get_settings()
+    if settings.use_mock_data:
+        return "mock"
+    return str(getattr(settings, "history_data_source", "efinance") or "efinance").lower()
+
+
+def _history_fallback_chain(primary: str) -> list[str]:
+    settings = get_settings()
+    if settings.use_mock_data:
+        return ["mock"]
+    primary = str(primary or "efinance").lower()
+    if not bool(getattr(settings, "enable_data_source_fallback", True)):
+        return [primary]
+    chains = {
+        "efinance": ["efinance", "sina", "mock"],
+        "sina": ["sina", "efinance", "mock"],
+        "akshare": ["akshare", "efinance", "sina", "mock"],
+        "mock": ["mock"],
+    }
+    return chains.get(primary, [primary, "efinance", "sina", "mock"])
+
+
+def _bars_have_amount(bars) -> bool:
+    try:
+        amount = bars.get("amount")
+        if amount is None:
+            return False
+        return bool(amount.notna().any() and (amount.fillna(0).astype(float) > 0).any())
+    except Exception:
+        return False
+
+
+def _estimate_amount_if_missing(row: dict, source_name: str) -> dict:
+    if source_name != "sina":
+        return row
+    amount = row.get("amount")
+    try:
+        amount_value = float(amount) if amount is not None else None
+    except Exception:
+        amount_value = None
+    if amount_value is not None and amount_value > 0:
+        return row
+    try:
+        close = float(row.get("close"))
+        volume = float(row.get("volume"))
+    except Exception:
+        return row
+    if close > 0 and volume > 0:
+        row["amount"] = close * volume * 100
+        row["_amount_estimated"] = True
+        logger.warning("history amount estimated code=%s source=%s trade_date=%s", row.get("code"), source_name, row.get("trade_date"))
+    return row
+
 class HistoryDataService:
     def __init__(self, source: BaseDataSource | None = None) -> None:
         self.source = source
@@ -27,14 +81,14 @@ class HistoryDataService:
     def _resolve_source(self):
         if self.source is not None:
             return self.source, self.source_name
-        name = primary_source_name()
-        logger.info("Using market data source: %s", name)
+        name = _history_source_name()
+        logger.info("Using history data source: %s", name)
         return build_data_source(name), name
 
     def _history_sources(self) -> list[tuple[BaseDataSource, str]]:
         if self.source is not None:
             return [(self.source, self.source_name)]
-        return [(build_data_source(name), name) for name in fallback_chain(primary_source_name())]
+        return [(build_data_source(name), name) for name in _history_fallback_chain(_history_source_name())]
 
     def _row_has_nested(self, row: dict) -> bool:
         for v in row.values():
@@ -90,6 +144,10 @@ class HistoryDataService:
                 try:
                     bars = candidate.fetch_daily_bars(code=code, start_date=str(start), end_date=str(end))
                     if bars is not None and not bars.empty:
+                        if candidate_name == "efinance" and not _bars_have_amount(bars):
+                            logger.warning("history efinance amount missing code=%s source=%s; trying fallback", code, candidate_name)
+                            bars = None
+                            continue
                         used_for_code = candidate_name
                         data_source_used = candidate_name
                         if candidate_name != source_name:
@@ -107,6 +165,8 @@ class HistoryDataService:
                 row["code"] = str(row.get("code") or code)
                 row["name"] = self._resolve_name(db, row["code"], name_map, row.get("name"))
                 row["trade_date"] = str(row["trade_date"])
+                row = _estimate_amount_if_missing(row, used_for_code)
+                row.pop("_amount_estimated", None)
                 exists = db.query(DailyBar).filter_by(code=row["code"], trade_date=row["trade_date"]).first()
                 if exists:
                     continue

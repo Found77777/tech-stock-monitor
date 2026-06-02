@@ -122,12 +122,13 @@ NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000 npm run dev
 ```bash
 USE_MOCK_DATA=false
 REAL_DATA_SOURCE=sina
+HISTORY_DATA_SOURCE=efinance
 ENABLE_DATA_SOURCE_FALLBACK=true
 ```
 
 `REAL_DATA_SOURCE` 支持：`efinance`、`sina`、`akshare`、`mock`。当前推荐行情/K线使用 `sina`；AKShare/EastMoney 在部分网络环境下可能不稳定。开启 fallback 后，行情源按 `sina -> mock`、`efinance -> sina -> mock` 或 `akshare -> efinance -> sina -> mock` 降级，并在接口返回 `data_source_used`。
 
-推荐配置：Sina 用于行情与K线，efinance `get_history_bill` 用于历史资金流。
+推荐配置：Sina 用于实时行情快照，efinance `get_quote_history` 用于历史K线（补全成交额/换手率），efinance `get_history_bill` 用于历史资金流。
 
 资金流配置默认不允许 proxy 静默伪装成真实资金流：
 

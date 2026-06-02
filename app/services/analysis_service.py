@@ -43,6 +43,12 @@ class AnalysisService:
             if len(bars) < 25:
                 continue
             d = pd.DataFrame([{"code":b.code,"name":b.name,"trade_date":b.trade_date,"close":b.close,"volume":b.volume,"amount":b.amount,"turnover_rate":b.turnover_rate} for b in bars])
+            d["amount_estimated"] = False
+            try:
+                estimated_amount = d["close"].astype(float) * d["volume"].astype(float) * 100
+                d["amount_estimated"] = d["turnover_rate"].isna() & d["amount"].notna() & ((d["amount"].astype(float) - estimated_amount).abs() <= estimated_amount.abs() * 0.001)
+            except Exception:
+                d["amount_estimated"] = False
             d = add_technical_factors(d)
             d = add_liquidity_factors(d)
             d = add_relative_strength_factors(d)
