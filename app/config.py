@@ -20,13 +20,14 @@ class Settings(BaseSettings):
 
     database_url: str = Field(default=f"sqlite:///{BASE_DIR / 'data' / 'tech_monitor.db'}")
 
-    data_source_provider: str = Field(default="akshare")
-    real_data_source: str = Field(default="akshare")
+    data_source_provider: str = Field(default="efinance")
+    real_data_source: str = Field(default="efinance")
     tushare_token: str = Field(default="")
     sina_user_agent: str | None = Field(default=None)
     sina_cookie: str | None = Field(default=None)
     min_amount: float = Field(default=50_000_000)
     use_mock_data: bool = Field(default=False)
+    enable_data_source_fallback: bool = Field(default=True)
 
     scheduler_timezone: str = Field(default="Asia/Shanghai")
 
@@ -37,7 +38,8 @@ class Settings(BaseSettings):
     llm_http_proxy: str = Field(default="")
     agent_news_sources: str = Field(default="sina,eastmoney,cninfo,baidu,rss")
     agent_enabled: bool = Field(default=False)
-    capital_flow_source: str = Field(default="proxy")  # proxy|eastmoney
+    capital_flow_source: str = Field(default="eastmoney")  # eastmoney|efinance|proxy|none
+    capital_flow_allow_proxy: bool = Field(default=False)
     capital_flow_top_n: int = Field(default=10)
     capital_flow_verify_top_n: int = Field(default=20)
     capital_flow_sleep_min: float = Field(default=10.0)

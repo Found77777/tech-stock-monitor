@@ -6,7 +6,9 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.data_sources.akshare_source import AKShareDataSource
+from app.data_sources.base import BaseDataSource
 from app.data_sources.mock_source import MockDataSource
+from app.data_sources.provider import build_data_source, fallback_chain, primary_source_name
 from app.data_sources.pytdx_source import PytdxDataSource
 from app.data_sources.sina_source import SinaDataSource
 from app.models import DailyBar, StockSnapshot
@@ -18,24 +20,21 @@ logger = get_logger(__name__)
 
 
 class HistoryDataService:
-    def __init__(self, source: AKShareDataSource | MockDataSource | SinaDataSource | PytdxDataSource | None = None) -> None:
+    def __init__(self, source: BaseDataSource | None = None) -> None:
         self.source = source
         self.source_name = "manual" if source is not None else "auto"
 
     def _resolve_source(self):
-        settings = get_settings()
         if self.source is not None:
             return self.source, self.source_name
-        if settings.use_mock_data:
-            return MockDataSource(), "mock"
-        src = str(settings.real_data_source).lower()
-        if src == "sina":
-            return SinaDataSource(), "sina"
-        if src == "pytdx":
-            return PytdxDataSource(), "pytdx"
-        if src == "akshare":
-            return AKShareDataSource(), "akshare"
-        return AKShareDataSource(), "akshare"
+        name = primary_source_name()
+        logger.info("Using market data source: %s", name)
+        return build_data_source(name), name
+
+    def _history_sources(self) -> list[tuple[BaseDataSource, str]]:
+        if self.source is not None:
+            return [(self.source, self.source_name)]
+        return [(build_data_source(name), name) for name in fallback_chain(primary_source_name())]
 
     def _row_has_nested(self, row: dict) -> bool:
         for v in row.values():
@@ -73,7 +72,9 @@ class HistoryDataService:
 
         universe = MarketDataService().latest_snapshot(db)
         if not universe:
-            universe = MarketDataService().source.get_realtime_quotes([]).to_dict(orient="records")[:80]
+            msvc = MarketDataService()
+            quotes, _ = msvc._fetch_realtime_with_fallback([])
+            universe = quotes.to_dict(orient="records")[:80]
 
         end = datetime.now().date()
         start = end - timedelta(days=max(days * 2, 180))
@@ -81,10 +82,23 @@ class HistoryDataService:
         codes = [x["code"] for x in universe]
         name_map = self._universe_name_map()
 
+        data_source_used = source_name
         for code in codes:
-            bars = source.fetch_daily_bars(code=code, start_date=str(start), end_date=str(end))
+            bars = None
+            used_for_code = source_name
+            for candidate, candidate_name in self._history_sources():
+                try:
+                    bars = candidate.fetch_daily_bars(code=code, start_date=str(start), end_date=str(end))
+                    if bars is not None and not bars.empty:
+                        used_for_code = candidate_name
+                        data_source_used = candidate_name
+                        if candidate_name != source_name:
+                            logger.warning("history fallback source used code=%s primary=%s fallback=%s", code, source_name, candidate_name)
+                        break
+                    logger.warning("history bars empty code=%s source=%s", code, candidate_name)
+                except Exception as exc:
+                    logger.warning("history source failed code=%s source=%s err=%s", code, candidate_name, exc)
             if bars is None or bars.empty:
-                logger.warning("history bars empty code=%s source=%s", code, source_name)
                 continue
             for row in bars.tail(days).to_dict(orient="records"):
                 if self._row_has_nested(row):
@@ -99,5 +113,5 @@ class HistoryDataService:
                 db.add(DailyBar(**row))
                 inserted += 1
         db.commit()
-        logger.info("history refresh done codes=%s inserted=%s", len(codes), inserted)
-        return {"codes": len(codes), "inserted": inserted, "days": days, "source": source_name}
+        logger.info("history refresh done codes=%s inserted=%s source=%s", len(codes), inserted, data_source_used)
+        return {"codes": len(codes), "inserted": inserted, "days": days, "source": data_source_used, "data_source_used": data_source_used}

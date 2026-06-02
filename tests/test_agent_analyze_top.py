@@ -83,7 +83,8 @@ def test_capital_flow_proxy_default():
         capital_flow_source = "proxy"
     agent_routes._CAPITAL_FLOW_CACHE.clear()
     out = agent_routes._fetch_capital_flow_with_cache("000001", "2026-05-27", S())
-    assert out["capital_flow_source"] in {"proxy", "proxy_fallback"}
+    assert out["capital_flow_source"] == "proxy_estimated"
+    assert out["capital_flow_is_estimated"] is True
 
 
 def test_capital_flow_eastmoney_success(monkeypatch):
@@ -121,7 +122,9 @@ def test_capital_flow_eastmoney_fail_to_fallback(monkeypatch):
     import sys
     sys.modules["akshare"] = AK
     out = agent_routes._fetch_capital_flow_with_cache("000001", "2026-05-27", S())
-    assert out["capital_flow_source"] == "proxy_fallback"
+    assert out["capital_flow_source"] == "unavailable"
+    assert out["capital_flow_confidence"] == 0
+    assert out["capital_flow_is_real"] is False
 
 
 def test_infer_akshare_fund_flow_market():
@@ -216,8 +219,42 @@ def test_capital_flow_three_failures():
     sys.modules["akshare"] = AK
     agent_routes._CAPITAL_FLOW_CACHE.clear()
     out = agent_routes._fetch_capital_flow_with_cache("000001", "2026-05-27", S())
-    assert out["capital_flow_source"] == "proxy_fallback"
+    assert out["capital_flow_source"] == "unavailable"
     assert out["attempts_used"] == 3
+    assert out["capital_flow_is_estimated"] is False
+
+
+def test_capital_flow_eastmoney_fail_allow_proxy(monkeypatch):
+    class AK:
+        @staticmethod
+        def stock_individual_fund_flow(stock, market):
+            raise RuntimeError("blocked")
+
+    class S:
+        capital_flow_source = "eastmoney"
+        capital_flow_allow_proxy = True
+        capital_flow_sleep_min = 0.0
+        capital_flow_sleep_max = 0.0
+        capital_flow_retry = 1
+        capital_flow_cache_enabled = True
+
+    import sys
+    sys.modules["akshare"] = AK
+    agent_routes._CAPITAL_FLOW_CACHE.clear()
+    out = agent_routes._fetch_capital_flow_with_cache("000001", "2026-05-27", S())
+    assert out["capital_flow_source"] == "proxy_estimated"
+    assert out["capital_flow_is_estimated"] is True
+    assert out["capital_flow_confidence"] == 30
+
+
+def test_capital_flow_none_source():
+    class S:
+        capital_flow_source = "none"
+        capital_flow_cache_enabled = False
+
+    out = agent_routes._fetch_capital_flow_with_cache("000001", "2026-05-27", S())
+    assert out["capital_flow_source"] == "none"
+    assert out["capital_flow_confidence"] == 0
 
 
 def test_capital_flow_cache_and_force_refresh(monkeypatch):

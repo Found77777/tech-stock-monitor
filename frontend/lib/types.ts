@@ -14,6 +14,11 @@ export type WatchlistItem = {
   base_total_score?: number;
   capital_flow_adjustment?: number;
   capital_flow_source?: string;
+  capital_flow_confidence?: number;
+  capital_flow_is_real?: boolean;
+  capital_flow_is_estimated?: boolean;
+  capital_flow_error_type?: string | null;
+  capital_flow_error_message?: string | null;
   news_alpha_adjustment?: number;
   ai_adjustment?: number;
   enhanced_score?: number;

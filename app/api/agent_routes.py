@@ -220,25 +220,68 @@ def _calc_ai_adjustment(ai_sentiment: float, ai_conf: float, ai_policy: float, a
     return _sanitize_num(adj, -cap, cap)
 
 
+def _capital_flow_meta(source: str, error_type: str | None = None, error_message: str = "", attempted: str = "") -> dict:
+    source = str(source or "unavailable")
+    if source == "real_eastmoney":
+        return {"capital_flow_source": source, "capital_flow_confidence": 80, "capital_flow_is_real": True, "capital_flow_is_estimated": False, "capital_flow_error_type": error_type, "capital_flow_error_message": error_message, "capital_flow_source_attempted": attempted or "eastmoney"}
+    if source == "efinance":
+        return {"capital_flow_source": source, "capital_flow_confidence": 60, "capital_flow_is_real": False, "capital_flow_is_estimated": False, "capital_flow_error_type": error_type, "capital_flow_error_message": error_message, "capital_flow_source_attempted": attempted or "efinance"}
+    if source == "proxy_estimated":
+        return {"capital_flow_source": source, "capital_flow_confidence": 30, "capital_flow_is_real": False, "capital_flow_is_estimated": True, "capital_flow_error_type": error_type, "capital_flow_error_message": error_message, "capital_flow_source_attempted": attempted or "proxy"}
+    if source == "none":
+        return {"capital_flow_source": source, "capital_flow_confidence": 0, "capital_flow_is_real": False, "capital_flow_is_estimated": False, "capital_flow_error_type": error_type, "capital_flow_error_message": error_message, "capital_flow_source_attempted": attempted or "none"}
+    return {"capital_flow_source": "unavailable", "capital_flow_confidence": 0, "capital_flow_is_real": False, "capital_flow_is_estimated": False, "capital_flow_error_type": error_type, "capital_flow_error_message": error_message, "capital_flow_source_attempted": attempted or source}
+
+
+def _proxy_capital_flow_payload(attempted: str = "proxy", error_type: str | None = None, error_message: str = "") -> dict:
+    payload = {
+        "net_inflow_1d": 0.0,
+        "net_inflow_5d": 0.0,
+        "net_inflow_10d": 0.0,
+        "attempts_used": 0,
+        "success_attempt": None,
+        **_capital_flow_meta("proxy_estimated", error_type=error_type, error_message=error_message, attempted=attempted),
+    }
+    return payload
+
+
+def _unavailable_capital_flow_payload(attempted: str, error_type: str | None = None, error_message: str = "", attempts_used: int = 0) -> dict:
+    return {
+        "net_inflow_1d": 0.0,
+        "net_inflow_5d": 0.0,
+        "net_inflow_10d": 0.0,
+        "attempts_used": attempts_used,
+        "success_attempt": None,
+        **_capital_flow_meta("unavailable", error_type=error_type, error_message=error_message, attempted=attempted),
+    }
+
+
 def _fetch_capital_flow_with_cache(code: str, trade_date: str, settings, force_refresh: bool = False) -> dict:
     key = (_norm_code(code), trade_date)
     cache_enabled = bool(getattr(settings, "capital_flow_cache_enabled", True))
     if cache_enabled and not force_refresh and key in _CAPITAL_FLOW_CACHE:
         return _CAPITAL_FLOW_CACHE[key]
 
-    source = str(getattr(settings, "capital_flow_source", "proxy")).lower()
+    source = str(getattr(settings, "capital_flow_source", "eastmoney")).lower()
+    allow_proxy = bool(getattr(settings, "capital_flow_allow_proxy", False))
+
+    if source == "none":
+        payload = {"net_inflow_1d": 0.0, "net_inflow_5d": 0.0, "net_inflow_10d": 0.0, "attempts_used": 0, "success_attempt": None, **_capital_flow_meta("none")}
+        if cache_enabled:
+            _CAPITAL_FLOW_CACHE[key] = payload
+        return payload
+    if source == "proxy":
+        payload = _proxy_capital_flow_payload(attempted="proxy")
+        if cache_enabled:
+            _CAPITAL_FLOW_CACHE[key] = payload
+        return payload
+    if source == "efinance":
+        payload = _unavailable_capital_flow_payload("efinance", "NotImplementedError", "efinance资金流暂未接入真实资金流字段，未使用proxy估算")
+        if cache_enabled:
+            _CAPITAL_FLOW_CACHE[key] = payload
+        return payload
     if source != "eastmoney":
-        payload = {
-            "capital_flow_source": "proxy",
-            "net_inflow_1d": 0.0,
-            "net_inflow_5d": 0.0,
-            "net_inflow_10d": 0.0,
-            "attempts_used": 0,
-            "success_attempt": None,
-            "capital_flow_error_type": None,
-            "capital_flow_error_message": "",
-            "capital_flow_source_attempted": source,
-        }
+        payload = _unavailable_capital_flow_payload(source, "UnsupportedCapitalFlowSource", f"unsupported capital_flow_source={source}")
         if cache_enabled:
             _CAPITAL_FLOW_CACHE[key] = payload
         return payload
@@ -253,22 +296,19 @@ def _fetch_capital_flow_with_cache(code: str, trade_date: str, settings, force_r
     for attempt in range(1, retry + 1):
         try:
             import akshare as ak
-            logger.info("capital flow attempt code=%s market=%s attempt=%s status=start", _norm_code(code), market, attempt)
+            logger.info("capital flow attempt code=%s market=%s function=stock_individual_fund_flow attempt=%s status=start", _norm_code(code), market, attempt)
             df = ak.stock_individual_fund_flow(stock=_norm_code(code), market=market)
             if df is None or df.empty:
                 raise ValueError("empty fund flow")
             latest = df.iloc[0]
             n1 = _sanitize_num(latest.get("主力净流入-净额", 0), -1e13, 1e13)
             payload = {
-                "capital_flow_source": "real_eastmoney",
                 "net_inflow_1d": n1,
                 "net_inflow_5d": 0.0,
                 "net_inflow_10d": 0.0,
                 "attempts_used": attempt,
                 "success_attempt": attempt,
-                "capital_flow_error_type": None,
-                "capital_flow_error_message": "",
-                "capital_flow_source_attempted": "eastmoney",
+                **_capital_flow_meta("real_eastmoney"),
             }
             logger.info("capital flow attempt code=%s market=%s attempt=%s status=success", _norm_code(code), market, attempt)
             if cache_enabled:
@@ -285,17 +325,11 @@ def _fetch_capital_flow_with_cache(code: str, trade_date: str, settings, force_r
             if attempt < retry:
                 time.sleep(sleep_s)
 
-    payload = {
-        "capital_flow_source": "proxy_fallback",
-        "net_inflow_1d": 0.0,
-        "net_inflow_5d": 0.0,
-        "net_inflow_10d": 0.0,
-        "attempts_used": retry,
-        "success_attempt": None,
-        "capital_flow_error_type": last_err_type,
-        "capital_flow_error_message": last_err_msg,
-        "capital_flow_source_attempted": "eastmoney",
-    }
+    if allow_proxy:
+        payload = _proxy_capital_flow_payload(attempted="eastmoney", error_type=last_err_type, error_message=last_err_msg)
+        payload["attempts_used"] = retry
+    else:
+        payload = _unavailable_capital_flow_payload("eastmoney", last_err_type, f"真实资金流获取失败，未使用proxy估算: {last_err_msg}", attempts_used=retry)
     if cache_enabled:
         _CAPITAL_FLOW_CACHE[key] = payload
     return payload
@@ -361,6 +395,7 @@ async def analyze_top(req: AnalyzeTopRequest, db: Session = Depends(get_db)):
         # Layer 3 must not trigger expensive EastMoney/AKShare verification.
         # Reuse Layer 2 metadata when present; otherwise mark capital flow as not verified.
         flow_source = str(getattr(s, "capital_flow_source", "not_verified") or "not_verified")
+        flow_meta = _capital_flow_meta(flow_source)
         base_score = base_total
 
         # persist per-news alpha details
@@ -411,6 +446,9 @@ async def analyze_top(req: AnalyzeTopRequest, db: Session = Depends(get_db)):
             "risk_flags": alpha.get("risk_flags", []),
             "capital_flow_adjustment": capital_adj,
             "capital_flow_source": flow_source,
+            "capital_flow_confidence": flow_meta["capital_flow_confidence"],
+            "capital_flow_is_real": flow_meta["capital_flow_is_real"],
+            "capital_flow_is_estimated": flow_meta["capital_flow_is_estimated"],
             "fetched_news_count": fetched_news_count,
             "valid_alpha_event_count": len([e for e in alpha.get("top_news_events", []) if abs(float(e.get("single_news_alpha", 0) or 0)) > 0]),
             "llm_parse_status": llm_parse_status_map.get(code, "unknown"),

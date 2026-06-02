@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import desc, func
 from sqlalchemy.orm import Session
 
-from app.api.agent_routes import _fetch_capital_flow_with_cache, _norm_code, _sanitize_num
+from app.api.agent_routes import _capital_flow_meta, _fetch_capital_flow_with_cache, _norm_code, _sanitize_num
 from app.config import get_settings
 from app.database import get_db
 from app.models import EnhancedStockScore, StockScore
@@ -90,28 +90,38 @@ def verification_capital_flow_top(top_n: int = 20, trade_date: str | None = None
         n10 = _sanitize_num(flow.get("net_inflow_10d", 0), -1e13, 1e13)
         pvr_adj = 0.0
         if n10 > 0 and n5 > 0:
-            adj = 6.0
+            raw_adj = 6.0
         elif n10 > 0 or n5 > 0:
-            adj = 3.0
+            raw_adj = 3.0
         else:
-            adj = -4.0
-        if flow.get("capital_flow_source") == "proxy_fallback":
-            adj = max(-2.0, min(2.0, adj))
-            fallback_count += 1
-            failed_count += 1
-        elif flow.get("capital_flow_source") == "real_eastmoney":
+            raw_adj = -4.0
+        flow_source = flow.get("capital_flow_source", "unavailable")
+        if flow_source == "real_eastmoney":
+            adj = raw_adj
             real_count += 1
+        elif flow_source == "proxy_estimated":
+            adj = max(-2.0, min(2.0, raw_adj))
+            fallback_count += 1
+        elif flow_source in {"unavailable", "none"}:
+            adj = 0.0
+            failed_count += 1 if flow_source == "unavailable" else 0
+        else:
+            adj = 0.0
         cap_score = _sanitize_num(50 + adj * 6, 0, 100)
         enhanced = _sanitize_num(float(row.total_score) + adj + pvr_adj, 0, 100)
-        reason = f"资金流来源={flow.get('capital_flow_source','proxy')} 5日/10日={n5:.0f}/{n10:.0f} 连续净流入={'是' if (n5>0 and n10>0) else '否'} 量价背离={'是' if adj<0 else '否'}"
+        reason = f"资金流来源={flow_source} 置信度={flow.get('capital_flow_confidence',0)} 5日/10日={n5:.0f}/{n10:.0f} 连续净流入={'是' if (n5>0 and n10>0) else '否'}"
+        if flow_source == "proxy_estimated":
+            reason += "；该资金流为量价估算，不代表真实主力资金流"
+        if flow_source == "unavailable":
+            reason += "；真实资金流获取失败，未使用proxy估算"
         es = db.query(EnhancedStockScore).filter_by(code=row.code, trade_date=td).first()
-        payload = dict(code=row.code, name=row.name, trade_date=td, base_rank=i, base_total_score=row.total_score, capital_flow_score=cap_score, capital_flow_source=flow.get("capital_flow_source", "proxy"), capital_flow_adjustment=adj, ai_adjustment=0.0, enhanced_score=enhanced, enhanced_rank=i, reasons=reason, ai_adjusted_score=enhanced, ai_sentiment_score=0.0, ai_confidence=0.0, ai_reasons="[]", original_rank=i, new_rank=i)
+        payload = dict(code=row.code, name=row.name, trade_date=td, base_rank=i, base_total_score=row.total_score, capital_flow_score=cap_score, capital_flow_source=flow_source, capital_flow_adjustment=adj, ai_adjustment=0.0, enhanced_score=enhanced, enhanced_rank=i, reasons=reason, ai_adjusted_score=enhanced, ai_sentiment_score=0.0, ai_confidence=0.0, ai_reasons="[]", original_rank=i, new_rank=i)
         if es:
             for k, v in payload.items():
                 setattr(es, k, v)
         else:
             db.add(EnhancedStockScore(**payload))
-        results.append({"code": _norm_code(row.code), "name": row.name, "base_rank": i, "base_total_score": row.total_score, "capital_flow_source": flow.get("capital_flow_source", "proxy"), "capital_flow_adjustment": adj, "enhanced_score": enhanced, "reasons": reason, "attempts_used": flow.get("attempts_used", 0), "success_attempt": flow.get("success_attempt"), "capital_flow_error_type": flow.get("capital_flow_error_type"), "capital_flow_error_message": flow.get("capital_flow_error_message"), "capital_flow_source_attempted": flow.get("capital_flow_source_attempted", "")})
+        results.append({"code": _norm_code(row.code), "name": row.name, "base_rank": i, "base_total_score": row.total_score, "capital_flow_source": flow_source, "capital_flow_confidence": flow.get("capital_flow_confidence", 0), "capital_flow_is_real": flow.get("capital_flow_is_real", False), "capital_flow_is_estimated": flow.get("capital_flow_is_estimated", False), "capital_flow_adjustment": adj, "enhanced_score": enhanced, "reasons": reason, "attempts_used": flow.get("attempts_used", 0), "success_attempt": flow.get("success_attempt"), "capital_flow_error_type": flow.get("capital_flow_error_type"), "capital_flow_error_message": flow.get("capital_flow_error_message"), "capital_flow_source_attempted": flow.get("capital_flow_source_attempted", "")})
     db.commit()
     import logging
     logging.getLogger(__name__).info("capital-flow-top batch verified_count=%s real_count=%s fallback_count=%s failed_count=%s", len(results), real_count, fallback_count, failed_count)
@@ -128,7 +138,8 @@ def watchlist_enhanced_top(limit: int = 20, db: Session = Depends(get_db)):
     for r in rows:
         if str(r.name).startswith("N000"):
             continue
-        out.append({"enhanced_rank": r.enhanced_rank or r.new_rank, "code": _norm_code(r.code), "name": r.name, "base_rank": r.base_rank or r.original_rank, "base_total_score": r.base_total_score, "capital_flow_score": r.capital_flow_score, "capital_flow_source": r.capital_flow_source, "capital_flow_adjustment": r.capital_flow_adjustment, "ai_adjustment": r.ai_adjustment, "enhanced_score": r.enhanced_score or r.ai_adjusted_score, "reasons": r.reasons or "", "ai_reasons": r.ai_reasons})
+        meta = _capital_flow_meta(r.capital_flow_source)
+        out.append({"enhanced_rank": r.enhanced_rank or r.new_rank, "code": _norm_code(r.code), "name": r.name, "base_rank": r.base_rank or r.original_rank, "base_total_score": r.base_total_score, "capital_flow_score": r.capital_flow_score, "capital_flow_source": r.capital_flow_source, "capital_flow_confidence": meta["capital_flow_confidence"], "capital_flow_is_real": meta["capital_flow_is_real"], "capital_flow_is_estimated": meta["capital_flow_is_estimated"], "capital_flow_adjustment": r.capital_flow_adjustment, "ai_adjustment": r.ai_adjustment, "enhanced_score": r.enhanced_score or r.ai_adjusted_score, "reasons": r.reasons or "", "ai_reasons": r.ai_reasons})
     return sanitize_for_json(out)
 
 @router.post("/backtest/factor-ic")

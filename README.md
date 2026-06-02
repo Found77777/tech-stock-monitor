@@ -114,3 +114,52 @@ NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000 npm run dev
 - `/ai-review-summary`：结构化 AI 复盘总结。
 
 后端已允许 CORS 来源：`http://localhost:3000`、`http://localhost:5173`。
+
+## 推荐数据源与资金流语义
+
+推荐真实行情源：
+
+```bash
+USE_MOCK_DATA=false
+REAL_DATA_SOURCE=efinance
+ENABLE_DATA_SOURCE_FALLBACK=true
+```
+
+`REAL_DATA_SOURCE` 支持：`efinance`、`sina`、`akshare`、`mock`。推荐 `efinance`；AKShare/EastMoney 在部分网络环境下可能不稳定。开启 fallback 后，行情源按 `efinance -> sina -> mock` 或 `akshare -> efinance -> sina -> mock` 降级，并在接口返回 `data_source_used`。
+
+资金流配置默认不允许 proxy 静默伪装成真实资金流：
+
+```bash
+CAPITAL_FLOW_SOURCE=eastmoney
+CAPITAL_FLOW_ALLOW_PROXY=false
+CAPITAL_FLOW_RETRY=3
+CAPITAL_FLOW_SLEEP_MIN=10.0
+CAPITAL_FLOW_SLEEP_MAX=20.0
+CAPITAL_FLOW_CACHE_ENABLED=true
+```
+
+资金流状态说明：
+
+- `real_eastmoney`：真实 EastMoney/AKShare 单股资金流，`capital_flow_is_real=true`。
+- `proxy_estimated`：量价估算资金流，不是真实主力资金流；仅当显式 `CAPITAL_FLOW_SOURCE=proxy` 或 `CAPITAL_FLOW_ALLOW_PROXY=true` 时使用，最多影响 ±2 分。
+- `unavailable`：真实资金流不可用，未使用 proxy 估算，`capital_flow_adjustment=0`。
+- `none`：不启用资金流，`capital_flow_adjustment=0`。
+
+显式启用 proxy 估算：
+
+```bash
+CAPITAL_FLOW_SOURCE=proxy
+# 或 EastMoney 失败后允许降级：
+CAPITAL_FLOW_SOURCE=eastmoney
+CAPITAL_FLOW_ALLOW_PROXY=true
+```
+
+验证命令：
+
+```bash
+curl -X POST http://127.0.0.1:8000/market/refresh
+curl -X POST "http://127.0.0.1:8000/history/refresh?days=120"
+curl -X POST http://127.0.0.1:8000/signals/generate
+curl -X POST http://127.0.0.1:8000/scores/generate
+curl "http://127.0.0.1:8000/watchlist/enhanced-top?limit=10"
+```

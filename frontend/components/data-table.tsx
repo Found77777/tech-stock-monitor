@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { ChevronDown, Medal } from "lucide-react";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
-import { SourceBadge } from "@/components/source-badge";
+import { SourceBadge, SourceNotice } from "@/components/source-badge";
 import { ScoreBar } from "@/components/score-bar";
 import { EmptyState } from "@/components/error-state";
 import { cn, formatNumber } from "@/lib/utils";
@@ -53,7 +53,7 @@ export function WatchlistTable({ rows, enhanced = false }: { rows: WatchlistItem
                 <TD className="font-medium text-slate-100">{r.name || "-"}</TD>
                 <TD><ScoreBar value={Number(r.base_total_score ?? r.total_score ?? 0)} compact /></TD>
                 <TD className={Number(r.capital_flow_adjustment || 0) >= 0 ? "font-mono text-emerald-300" : "font-mono text-red-300"}>{formatNumber(r.capital_flow_adjustment)}</TD>
-                <TD><SourceBadge source={r.capital_flow_source} /></TD>
+                <TD><SourceBadge source={r.capital_flow_source} /><SourceNotice source={r.capital_flow_source} /></TD>
                 <TD className={Number(r.news_alpha_adjustment ?? r.ai_adjustment ?? 0) >= 0 ? "font-mono text-emerald-300" : "font-mono text-red-300"}>{formatNumber(r.news_alpha_adjustment ?? r.ai_adjustment)}</TD>
                 <TD><div className={cn("font-mono text-lg font-semibold", score >= 75 ? "text-emerald-300" : score >= 55 ? "text-cyan-200" : score >= 35 ? "text-yellow-200" : "text-red-300")}>{formatNumber(score)}</div></TD>
                 {enhanced && <TD className="min-w-[280px] max-w-lg">

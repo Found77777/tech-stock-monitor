@@ -29,3 +29,13 @@ def test_agent_news_sources_default_include_resilient_sources():
     settings = Settings(_env_file=None)
     sources = {x.strip() for x in settings.agent_news_sources.split(",")}
     assert {"sina", "eastmoney", "cninfo", "baidu", "rss"}.issubset(sources)
+
+
+def test_data_source_and_capital_flow_defaults_are_safe():
+    from app.config import Settings
+
+    settings = Settings(_env_file=None)
+    assert settings.real_data_source == "efinance"
+    assert settings.enable_data_source_fallback is True
+    assert settings.capital_flow_source == "eastmoney"
+    assert settings.capital_flow_allow_proxy is False
