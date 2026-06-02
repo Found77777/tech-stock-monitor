@@ -245,3 +245,17 @@ def test_capital_flow_cache_and_force_refresh(monkeypatch):
     assert calls["n"] == 1
     _ = agent_routes._fetch_capital_flow_with_cache("000001", "2026-05-27", S(), force_refresh=True)
     assert calls["n"] == 2
+
+
+def test_analyze_top_does_not_fetch_capital_flow(monkeypatch):
+    _seed_scores(3)
+    monkeypatch.setattr(agent_routes, "NewsAgent", DummyAgent)
+
+    def boom(*args, **kwargs):
+        raise AssertionError("analyze-top should not call capital flow verification")
+
+    monkeypatch.setattr(agent_routes, "_fetch_capital_flow_with_cache", boom)
+    client = TestClient(app)
+    resp = client.post("/agent/analyze-top", json={"top_n": 1, "rerank": True})
+    assert resp.status_code == 200
+    assert resp.json()["items"][0]["capital_flow_source"] == "not_verified"

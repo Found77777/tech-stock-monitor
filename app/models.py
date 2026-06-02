@@ -150,6 +150,64 @@ class DailyMarketIntelligence(Base):
     risk_notes = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
+
+class TradePlan(Base):
+    __tablename__ = "trade_plan"
+    __table_args__ = (UniqueConstraint("trade_date", name="uq_trade_plan_date"),)
+    id = Column(Integer, primary_key=True)
+    trade_date = Column(String(16), index=True, nullable=False)
+    watch_symbols = Column(Text, nullable=True)
+    focus_sectors = Column(Text, nullable=True)
+    market_view = Column(Text, nullable=True)
+    bull_case = Column(Text, nullable=True)
+    bear_case = Column(Text, nullable=True)
+    max_position = Column(Float, nullable=False, default=0.0)
+    planned_trades = Column(Text, nullable=True)
+    risk_notes = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class DailyReview(Base):
+    __tablename__ = "daily_review"
+    __table_args__ = (UniqueConstraint("review_date", name="uq_daily_review_date"),)
+    id = Column(Integer, primary_key=True)
+    review_date = Column(String(16), index=True, nullable=False)
+    status = Column(String(32), nullable=False, default="pending")
+    market_score = Column(Float, nullable=False, default=0.0)
+    market_environment = Column(Text, nullable=True)
+    emotion_score = Column(Float, nullable=False, default=0.0)
+    execution_score = Column(Float, nullable=False, default=0.0)
+    discipline_score = Column(Float, nullable=False, default=0.0)
+    daily_pnl = Column(Float, nullable=False, default=0.0)
+    max_drawdown = Column(Float, nullable=False, default=0.0)
+    largest_winner = Column(Text, nullable=True)
+    largest_loser = Column(Text, nullable=True)
+    mistakes = Column(Text, nullable=True)
+    good_decisions = Column(Text, nullable=True)
+    lessons_learned = Column(Text, nullable=True)
+    tomorrow_plan = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class TradeLog(Base):
+    __tablename__ = "trade_log"
+    id = Column(Integer, primary_key=True)
+    trade_date = Column(String(16), index=True, nullable=False)
+    symbol = Column(String(20), index=True, nullable=False)
+    action = Column(String(32), nullable=False)
+    quantity = Column(Float, nullable=False, default=0.0)
+    entry_price = Column(Float, nullable=False, default=0.0)
+    exit_price = Column(Float, nullable=False, default=0.0)
+    pnl = Column(Float, nullable=False, default=0.0)
+    planned_trade = Column(String(16), nullable=False, default="false")
+    actual_reason = Column(Text, nullable=True)
+    result_score = Column(Float, nullable=False, default=0.0)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
 class BacktestResult(Base):
     __tablename__ = "backtest_results"
     id = Column(Integer, primary_key=True)

@@ -1,4 +1,3 @@
-"""改进的 agent_routes.py - 集成所有优化"""
 from __future__ import annotations
 
 import json
@@ -13,14 +12,11 @@ from pydantic import BaseModel
 from sqlalchemy import desc, func
 from sqlalchemy.orm import Session
 
+from app.agent.config_validation import validate_agent_config
 from app.agent.daily_market_agent import DailyMarketIntelligenceAgent
 from app.agent.news_agent import NewsAgent
 from app.agent.news_alpha_engine import compute_news_alpha
-from app.agent.news_alpha_integrator import integrate_news_alpha_to_analysis
-from app.agent.news_sources_improved import build_improved_news_sources
 from app.agent.sentiment_scorer import merge_market_overview, score_from_analysis
-from app.agent.config_validator import validate_agent_config
-from app.agent.metrics import agent_metrics
 from app.config import get_settings
 from app.database import get_db
 from app.models import DailyBar, DailyMarketIntelligence, EnhancedStockScore, NewsAlphaSignal, NewsAnalysis, StockScore
@@ -46,6 +42,27 @@ def infer_akshare_fund_flow_market(code: str) -> str:
     return "sz"
 
 
+@router.get("/health")
+def agent_health():
+    settings = get_settings()
+    validation = validate_agent_config(settings)
+    agent = NewsAgent(settings)
+    status = "ok" if validation.get("ok") else "degraded"
+    return {
+        "status": status,
+        "enabled_news_sources": [source.name for source in agent.news_sources],
+        "llm_configured": validation.get("llm_configured", False),
+        "llm_proxy_configured": validation.get("llm_proxy_configured", False),
+        "warnings": validation.get("warnings", []),
+        "errors": validation.get("errors", []),
+    }
+
+
+@router.get("/config/validate")
+def agent_config_validate():
+    return validate_agent_config(get_settings())
+
+
 class AnalyzeRequest(BaseModel):
     stock_codes: list[str] | None = None
     include_market_overview: bool = True
@@ -63,42 +80,6 @@ class DailyMarketRequest(BaseModel):
     max_related_stocks: int = 5
 
 
-@router.get("/health")
-def agent_health(db: Session = Depends(get_db)):
-    """✅ 新增：检查 Agent 系统的健康状态"""
-    settings = get_settings()
-    
-    # 验证配置
-    config_valid, config_warnings = validate_agent_config(settings)
-    
-    health_status = {
-        "agent_enabled": settings.agent_enabled,
-        "agent_debug_mode": settings.agent_debug_mode,
-        "news_sources": settings.agent_news_sources.split(","),
-        "llm_configured": bool(settings.llm_api_key),
-        "tushare_configured": bool(settings.tushare_token),
-        "config_valid": config_valid,
-        "config_warnings": config_warnings,
-        "last_analysis_date": None,
-        "metrics": agent_metrics.get_summary(),
-    }
-    
-    # 检查最近的分析
-    try:
-        last = db.query(NewsAnalysis.analysis_date).order_by(
-            NewsAnalysis.analysis_date.desc()
-        ).first()
-        if last:
-            health_status["last_analysis_date"] = last[0]
-            logger.info("agent_health last_analysis_date=%s", last[0])
-    except Exception as e:
-        health_status["last_error"] = str(e)
-        logger.exception("agent_health check failed")
-    
-    logger.info("agent_health status=%s", json.dumps(health_status, default=str, ensure_ascii=False))
-    return health_status
-
-
 @router.post("/analyze")
 async def analyze_news(req: AnalyzeRequest, db: Session = Depends(get_db)):
     agent = NewsAgent(get_settings())
@@ -114,12 +95,10 @@ async def analyze_news(req: AnalyzeRequest, db: Session = Depends(get_db)):
                 items, dbg = await agent.fetch_stock_news(code)
                 source_debug[code] = dbg
                 fetched_news_count[code] = len(items)
-                agent_metrics.record_news_fetch(len(items) > 0)
         else:
             for code in codes:
                 fetched_news_count[code] = 0
                 source_debug[code] = {"debug_reason": "agent_has_no_fetch_stock_news"}
-                agent_metrics.record_news_fetch(False)
         analyses = await agent.analyze_stocks(codes)
         fetched_counts: dict[str, int] = {code: int(fetched_news_count.get(code, 0)) for code in codes}
         by_code = {}
@@ -130,7 +109,6 @@ async def analyze_news(req: AnalyzeRequest, db: Session = Depends(get_db)):
                 by_code[c] = a
                 fetched_counts[c] = fetched_counts.get(c, 0) + 1
                 llm_parse_status[c] = "ok"
-                agent_metrics.record_llm_call(True)
         logger.info("agent fetched news count per stock=%s", fetched_counts)
         logger.info("agent fetched/parsed analysis count=%s", len(by_code))
 
@@ -140,30 +118,28 @@ async def analyze_news(req: AnalyzeRequest, db: Session = Depends(get_db)):
             is_fallback = False
             if not a:
                 is_fallback = True
-                agent_metrics.record_llm_call(False)
-                # ✅ 改进3：LLM 失败时返回默认中性值，而不是 0
                 a = {
                     "stock_code": code,
-                    "policy_sentiment": 25,
-                    "fundamental_event_score": 30,
-                    "industry_momentum": 40,
-                    "market_buzz_score": 35,
+                    "policy_sentiment": 0,
+                    "fundamental_event_score": 0,
+                    "industry_momentum": 0,
+                    "market_buzz_score": 0,
                     "market_buzz_direction": 0,
-                    "macro_impact": 20,
-                    "composite_sentiment": 40,
-                    "confidence": 0.1,
-                    "risk_flags": ["LLM分析失败，使用默认中性值"],
+                    "macro_impact": 0,
+                    "composite_sentiment": 0,
+                    "confidence": 0,
+                    "risk_flags": ["未抓取到有效新闻，暂不调整评分"],
                     "key_events": [],
-                    "summary": "LLM分析失败，使用规则引擎",
+                    "summary": "未抓取到有效新闻，暂不调整评分",
                 }
             if is_fallback:
                 scored = {
-                    "ai_sentiment_score": 40.0,
-                    "ai_confidence": 0.1,
+                    "ai_sentiment_score": 0.0,
+                    "ai_confidence": 0.0,
                     "ai_policy_boost": 0.0,
                     "ai_fundamental_boost": 0.0,
-                    "ai_risk_flags": ["LLM分析失败"],
-                    "ai_reasons": ["LLM分析失败，使用默认中性值"],
+                    "ai_risk_flags": ["未抓取到有效新闻，暂不调整评分"],
+                    "ai_reasons": ["未抓取到有效新闻，暂不调整评分"],
                 }
             else:
                 scored = score_from_analysis(a)
@@ -178,6 +154,8 @@ async def analyze_news(req: AnalyzeRequest, db: Session = Depends(get_db)):
         results["fetched_news_count"] = fetched_counts
         results["source_debug"] = source_debug
         results["llm_parse_status"] = llm_parse_status
+        results["llm_status"] = getattr(agent, "last_llm_status", "unknown")
+        results["llm_error"] = getattr(agent, "last_llm_error", "")
         logger.info("agent generated stock analysis count=%s", len(results["stock_analyses"]))
     if req.include_market_overview:
         overview = await agent.market_overview()
@@ -194,7 +172,7 @@ def get_latest_analysis(db: Session = Depends(get_db)):
     if not td:
         return {"analyses": [], "date": None}
     rows = db.query(NewsAnalysis).filter_by(analysis_date=td).order_by(desc(NewsAnalysis.ai_sentiment_score)).all()
-    return {"date": td, "analyses": [{"stock_code": r.stock_code, "ai_sentiment_score": r.ai_sentiment_score, "ai_confidence": r.ai_confidence, "ai_policy_boost": r.ai_policy_boost, "ai_fundamental_boost": r.ai_fundamental_boost} for r in rows]}
+    return {"date": td, "analyses": [{"stock_code": r.stock_code, "ai_sentiment_score": r.ai_sentiment_score, "ai_confidence": r.ai_confidence, "ai_policy_boost": r.ai_policy_boost, "ai_fundamental_boost": r.ai_fundamental_boost, "ai_reasons": json.loads(r.ai_reasons) if r.ai_reasons else []} for r in rows]}
 
 
 def _upsert_news_analysis(db: Session, record: dict):
@@ -265,8 +243,8 @@ def _fetch_capital_flow_with_cache(code: str, trade_date: str, settings, force_r
             _CAPITAL_FLOW_CACHE[key] = payload
         return payload
 
-    sleep_min = float(getattr(settings, "capital_flow_sleep_min", 8.0))
-    sleep_max = float(getattr(settings, "capital_flow_sleep_max", 18.0))
+    sleep_min = float(getattr(settings, "capital_flow_sleep_min", 10.0))
+    sleep_max = float(getattr(settings, "capital_flow_sleep_max", 20.0))
     retry = max(1, int(getattr(settings, "capital_flow_retry", 3)))
     market = infer_akshare_fund_flow_market(code)
     last_err_type = None
@@ -325,7 +303,6 @@ def _fetch_capital_flow_with_cache(code: str, trade_date: str, settings, force_r
 
 @router.post("/analyze-top")
 async def analyze_top(req: AnalyzeTopRequest, db: Session = Depends(get_db)):
-    """✅ 改进1：使用改进的新闻源和集成模块"""
     settings = get_settings()
     top_n_default = int(getattr(settings, "capital_flow_top_n", 10))
     top_n = int(req.top_n or top_n_default)
@@ -344,142 +321,125 @@ async def analyze_top(req: AnalyzeTopRequest, db: Session = Depends(get_db)):
         return {"items": [], "message": "no score rows in date"}
     codes = [_norm_code(x.code) for x in base_rows]
     logger.info("agent analyze-top initial top_n codes=%s", codes)
+    logger.info("agent analyze-top llm_call_count=%s", 1 if codes else 0)
 
-    # ✅ 改进1：使用改进的新闻源
-    news_sources = build_improved_news_sources(settings)
+    # reuse analyze flow logic for specified codes only
+    analyze_req = AnalyzeRequest(stock_codes=codes, include_market_overview=True)
+    analyze_result = await analyze_news(analyze_req, db)
+    source_debug = analyze_result.get("source_debug", {}) if isinstance(analyze_result, dict) else {}
+    llm_parse_status_map = analyze_result.get("llm_parse_status", {}) if isinstance(analyze_result, dict) else {}
+
+    news_rows = db.query(NewsAnalysis).filter_by(analysis_date=datetime.now().strftime("%Y-%m-%d")).all()
+    news_map = { _norm_code(n.stock_code): n for n in news_rows if n.stock_code != "MARKET" }
     out = []
-    
     for idx, s in enumerate(base_rows, start=1):
+        n = news_map.get(_norm_code(s.code))
+        ai_sent = _sanitize_num(getattr(n, "ai_sentiment_score", 0), 0, 100) if n else 0.0
+        ai_conf = _sanitize_num(getattr(n, "ai_confidence", 0), 0, 100) if n else 0.0
+        ai_pol = _sanitize_num(getattr(n, "ai_policy_boost", 0), -15, 15) if n else 0.0
+        ai_fun = _sanitize_num(getattr(n, "ai_fundamental_boost", 0), -10, 10) if n else 0.0
+        ai_reasons = json.loads(n.ai_reasons) if (n and n.ai_reasons) else ["未抓取到有效新闻，暂不调整评分"]
+
         code = _norm_code(s.code)
-        
-        try:
-            # 使用改进的新闻源获取新闻
-            news_items = []
-            for source in news_sources:
-                try:
-                    fetched = await source.fetch([code])
-                    news_items.extend(fetched or [])
-                    if fetched:
-                        agent_metrics.record_news_fetch(True)
-                        logger.info("news_fetch source=%s code=%s fetched=%s", source.name, code, len(fetched))
-                except Exception as e:
-                    agent_metrics.record_news_fetch(False)
-                    # ✅ 改进2：记录每个新闻源的错误
-                    logger.exception("news_fetch source=%s code=%s failed: %s", source.name, code, e)
-            
-            stock_meta = {"code": code, "name": s.name or ""}
-            
-            # ✅ 改进1：使用统一的集成函数
-            ai_data = integrate_news_alpha_to_analysis(
-                db=db,
-                code=code,
-                trade_date=trade_date,
-                news_items=news_items,
-                stock_meta=stock_meta
-            )
-            
-            alpha = ai_data.get("raw_alpha", {})
-            alpha_adj = _sanitize_num(alpha.get("news_alpha_adjustment", 0), -10, 10)
-            agent_metrics.record_alpha_adjustment(alpha_adj)
-            
-            fetched_news_count = len(news_items)
-            
-            base_total = _sanitize_num(float(getattr(s, "base_total_score", 0) or getattr(s, "total_score", 0)), 0, 100)
-            capital_adj = _sanitize_num(float(getattr(s, "capital_flow_adjustment", 0)), -8, 8)
-            pre_ai_enhanced = _sanitize_num(float(getattr(s, "enhanced_score", 0) or (base_total + capital_adj)), 0, 100)
-            ai_score = _sanitize_num(pre_ai_enhanced + alpha_adj, 0, 100)
-            flow_data = _fetch_capital_flow_with_cache(s.code, trade_date, settings)
-            base_score = base_total
+        stock_debug = source_debug.get(code, {})
+        fetched_news_count = int(stock_debug.get("final_return_count", 0) or 0)
+        news_items = list((stock_debug.get("final_news") or []))[:5]
+        if fetched_news_count > 0 and not news_items:
+            news_items = [{"title": "已抓取新闻但结构化失败", "source": "unknown", "publish_time": "", "summary": "", "url": ""}]
+        stock_meta = {"code": code, "name": s.name or ""}
+        alpha = compute_news_alpha(news_items, stock_meta)
+        alpha_adj = _sanitize_num(alpha.get("news_alpha_adjustment", 0), -10, 10)
+        if fetched_news_count == 0 and ai_reasons and any("未抓取到有效新闻" in str(x) for x in ai_reasons):
+            alpha_adj = 0.0
+        if fetched_news_count > 0 and ai_reasons and any("未抓取到有效新闻" in str(x) for x in ai_reasons):
+            ai_reasons = ["已抓取新闻，但未识别出高置信alpha事件，暂不调整评分"]
 
-            # persist per-news alpha details
-            db.query(NewsAlphaSignal).filter_by(stock_code=code, analysis_date=trade_date).delete()
-            for ev in alpha.get("top_news_events", []):
-                db.add(NewsAlphaSignal(
-                    stock_code=code, analysis_date=trade_date, news_title=str(ev.get("title", "")),
-                    news_url="", source="", publish_time="", event_type=str(ev.get("event_type", "unknown")),
-                    impact_direction=str(ev.get("impact_direction", "neutral")), impact_horizon=str(ev.get("impact_horizon", "short_term")),
-                    relevance_score=_sanitize_num(ev.get("news_relevance_score", 0), 0, 100),
-                    importance_score=_sanitize_num(ev.get("news_importance_score", 0), 0, 100),
-                    freshness_score=_sanitize_num(ev.get("news_freshness_score", 0), 0, 100),
-                    confidence=_sanitize_num(ev.get("confidence", 0), 0, 1),
-                    single_news_alpha=_sanitize_num(ev.get("single_news_alpha", 0), -100, 100),
-                    alpha_reasons=json.dumps(ev.get("alpha_reasons", []), ensure_ascii=False),
-                ))
-            if fetched_news_count > 0 and not alpha.get("top_news_events"):
-                alpha["top_news_events"] = [
-                    {
-                        "title": x.get("title", ""),
-                        "source": x.get("source", ""),
-                        "publish_time": x.get("publish_time", ""),
-                        "event_type": "unknown",
-                        "impact_direction": "neutral",
-                        "relevance_score": 0.0,
-                        "importance_score": 0.0,
-                        "freshness_score": 50.0,
-                        "confidence": 0.0,
-                    }
-                    for x in news_items[:3]
-                ]
-            if fetched_news_count > 0 and alpha_adj == 0:
-                alpha["news_alpha_summary"] = "已抓取新闻，但未识别出高置信alpha事件（可能为相关性不足/过旧/市场噪音/无公司级事件），暂不调整评分"
+        base_total = _sanitize_num(float(getattr(s, "base_total_score", 0) or getattr(s, "total_score", 0)), 0, 100)
+        capital_adj = _sanitize_num(float(getattr(s, "capital_flow_adjustment", 0)), -8, 8)
+        pre_ai_enhanced = _sanitize_num(float(getattr(s, "enhanced_score", 0) or (base_total + capital_adj)), 0, 100)
+        ai_score = _sanitize_num(pre_ai_enhanced + alpha_adj, 0, 100)
+        # Layer 3 must not trigger expensive EastMoney/AKShare verification.
+        # Reuse Layer 2 metadata when present; otherwise mark capital flow as not verified.
+        flow_source = str(getattr(s, "capital_flow_source", "not_verified") or "not_verified")
+        base_score = base_total
 
-            out.append({
-                "original_rank": idx,
-                "code": _norm_code(s.code),
-                "name": s.name,
-                "original_score": base_score,
-                "ai_adjusted_score": ai_score,
-                "ai_sentiment_score": ai_data.get("ai_sentiment_score", 50),
-                "ai_confidence": ai_data.get("ai_confidence", 0.0),
-                "ai_reasons": ai_data.get("ai_reasons", []),
-                "ai_adjustment": alpha_adj,
-                "news_alpha_adjustment": alpha_adj,
-                "top_news_events": alpha.get("top_news_events", []),
-                "news_alpha_summary": alpha.get("news_alpha_summary", ""),
-                "risk_flags": alpha.get("risk_flags", []),
-                "capital_flow_adjustment": capital_adj,
-                "capital_flow_source": flow_data.get("capital_flow_source", "proxy"),
-                "fetched_news_count": fetched_news_count,
-                "valid_alpha_event_count": len([e for e in alpha.get("top_news_events", []) if abs(float(e.get("single_news_alpha", 0) or 0)) > 0]),
-            })
-        except Exception as e:
-            logger.exception("analyze_top processing failed for code=%s", code)
-            # 即使失败也继续处理下一个
-            out.append({
-                "original_rank": idx,
-                "code": code,
-                "name": s.name,
-                "original_score": 0,
-                "ai_adjusted_score": 0,
-                "error": str(e),
-            })
-    
-    reranked = sorted(out, key=lambda x: x.get("ai_adjusted_score", 0), reverse=True)
+        # persist per-news alpha details
+        db.query(NewsAlphaSignal).filter_by(stock_code=code, analysis_date=trade_date).delete()
+        for ev in alpha.get("top_news_events", []):
+            db.add(NewsAlphaSignal(
+                stock_code=code, analysis_date=trade_date, news_title=str(ev.get("title", "")),
+                news_url="", source="", publish_time="", event_type=str(ev.get("event_type", "unknown")),
+                impact_direction=str(ev.get("impact_direction", "neutral")), impact_horizon=str(ev.get("impact_horizon", "short_term")),
+                relevance_score=_sanitize_num(ev.get("news_relevance_score", 0), 0, 100),
+                importance_score=_sanitize_num(ev.get("news_importance_score", 0), 0, 100),
+                freshness_score=_sanitize_num(ev.get("news_freshness_score", 0), 0, 100),
+                confidence=_sanitize_num(ev.get("confidence", 0), 0, 1),
+                single_news_alpha=_sanitize_num(ev.get("single_news_alpha", 0), -100, 100),
+                alpha_reasons=json.dumps(ev.get("alpha_reasons", []), ensure_ascii=False),
+            ))
+        if fetched_news_count > 0 and not alpha.get("top_news_events"):
+            alpha["top_news_events"] = [
+                {
+                    "title": x.get("title", ""),
+                    "source": x.get("source", ""),
+                    "publish_time": x.get("publish_time", ""),
+                    "event_type": "unknown",
+                    "impact_direction": "neutral",
+                    "relevance_score": 0.0,
+                    "importance_score": 0.0,
+                    "freshness_score": 50.0,
+                    "confidence": 0.0,
+                }
+                for x in news_items[:3]
+            ]
+        if fetched_news_count > 0 and alpha_adj == 0:
+            alpha["news_alpha_summary"] = "已抓取新闻，但未识别出高置信alpha事件（可能为相关性不足/过旧/市场噪音/无公司级事件），暂不调整评分"
+
+        out.append({
+            "original_rank": idx,
+            "code": _norm_code(s.code),
+            "name": s.name,
+            "original_score": base_score,
+            "ai_adjusted_score": ai_score,
+            "ai_sentiment_score": ai_sent,
+            "ai_confidence": alpha.get("confidence", 0.0),
+            "ai_reasons": ai_reasons,
+            "ai_adjustment": alpha_adj,
+            "news_alpha_adjustment": alpha_adj,
+            "top_news_events": alpha.get("top_news_events", []),
+            "news_alpha_summary": alpha.get("news_alpha_summary", ""),
+            "risk_flags": alpha.get("risk_flags", []),
+            "capital_flow_adjustment": capital_adj,
+            "capital_flow_source": flow_source,
+            "fetched_news_count": fetched_news_count,
+            "valid_alpha_event_count": len([e for e in alpha.get("top_news_events", []) if abs(float(e.get("single_news_alpha", 0) or 0)) > 0]),
+            "llm_parse_status": llm_parse_status_map.get(code, "unknown"),
+        })
+    reranked = sorted(out, key=lambda x: x["ai_adjusted_score"], reverse=True)
     rank_map = {x["code"]: i + 1 for i, x in enumerate(reranked)}
     for row in out:
         row["new_rank"] = rank_map[row["code"]] if req.rerank else row["original_rank"]
         # persist enhanced score table (non-breaking)
-        if "error" not in row:
-            es = db.query(EnhancedStockScore).filter_by(code=row["code"], trade_date=trade_date).first()
-            payload = {
-                "code": row["code"], "name": row["name"], "trade_date": trade_date,
-                "base_total_score": row["original_score"], "ai_adjusted_score": row["ai_adjusted_score"],
-                "ai_sentiment_score": row["ai_sentiment_score"], "ai_confidence": row["ai_confidence"],
-                "ai_reasons": json.dumps(row["ai_reasons"], ensure_ascii=False),
-                "original_rank": row["original_rank"], "new_rank": row["new_rank"],
-                "ai_adjustment": _sanitize_num(row.get("news_alpha_adjustment", row.get("ai_adjustment", 0)), -10, 10),
-                "enhanced_score": row["ai_adjusted_score"],
-                "reasons": json.dumps(row.get("risk_flags", []), ensure_ascii=False),
-                "enhanced_rank": row["new_rank"],
-            }
-            if es:
-                for k, v in payload.items():
-                    setattr(es, k, v)
-            else:
-                db.add(EnhancedStockScore(**payload))
-    logger.info("agent analyze-top rerank result=%s", [(x["code"], x.get("original_rank"), x.get("new_rank")) for x in out if "error" not in x])
+        es = db.query(EnhancedStockScore).filter_by(code=row["code"], trade_date=trade_date).first()
+        payload = {
+            "code": row["code"], "name": row["name"], "trade_date": trade_date,
+            "base_total_score": row["original_score"], "ai_adjusted_score": row["ai_adjusted_score"],
+            "ai_sentiment_score": row["ai_sentiment_score"], "ai_confidence": row["ai_confidence"],
+            "ai_reasons": json.dumps(row["ai_reasons"], ensure_ascii=False),
+            "original_rank": row["original_rank"], "new_rank": row["new_rank"],
+            "ai_adjustment": _sanitize_num(row.get("news_alpha_adjustment", row.get("ai_adjustment", 0)), -10, 10),
+            "enhanced_score": row["ai_adjusted_score"],
+            "reasons": json.dumps(row.get("risk_flags", []), ensure_ascii=False),
+            "enhanced_rank": row["new_rank"],
+        }
+        if es:
+            for k, v in payload.items():
+                setattr(es, k, v)
+        else:
+            db.add(EnhancedStockScore(**payload))
+    logger.info("agent analyze-top rerank result=%s", [(x["code"], x["original_rank"], x["new_rank"]) for x in out])
     db.commit()
-    return {"trade_date": trade_date, "top_n": top_n, "items": sorted(out, key=lambda x: x.get("new_rank", 999))}
+    return {"trade_date": trade_date, "top_n": top_n, "items": sorted(out, key=lambda x: x["new_rank"])}
 
 
 @router.get("/news-alpha/latest")
@@ -540,7 +500,7 @@ async def daily_market(req: DailyMarketRequest, db: Session = Depends(get_db)):
 def daily_market_latest(db: Session = Depends(get_db)):
     td = db.query(func.max(DailyMarketIntelligence.analysis_date)).scalar()
     if not td:
-        return {"analysis_date": None, "top_news_json": [], "affected_sectors_json": [], "affected_themes_json": [], "related_stocks_json": [], "market_summary": "未抓取到有效市场新闻", "risk_notes": []}
+        return {"analysis_date": None, "top_news_json": [], "affected_sectors_json": [], "affected_themes_json": [], "related_stocks_json": [], "market_summary": "未抓取到有效市场新闻", "risk_notes": ["新闻源为空，未进行主题映射"]}
     row = db.query(DailyMarketIntelligence).filter_by(analysis_date=td).first()
     return {
         "analysis_date": row.analysis_date,

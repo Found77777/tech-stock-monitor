@@ -77,3 +77,40 @@ LLM_HTTP_PROXY=http://127.0.0.1:7890
 说明：
 - DeepSeek/OpenAI 调用使用 `LLM_HTTP_PROXY`。
 - AKShare/EastMoney 直连（不走该代理）。
+
+### AI Agent 运维检查
+- `GET /agent/health`：查看 Agent 可用状态、启用的新闻源、LLM/代理配置状态与配置告警。
+- `GET /agent/config/validate`：仅校验 Agent 配置，不访问外部网络；适合启动前排查 `.env`。
+- 当 LLM 调用失败或 JSON 解析失败时，系统不会清空已抓取新闻，会退化到规则引擎生成个股/市场分析，并在响应中保留 `llm_status` / `llm_parse_status` 等调试信息。
+- 默认新闻源为 `sina,eastmoney,cninfo,baidu,rss`，用于避免单一来源失败导致 Agent 无新闻可用。
+
+## Web 前端 MVP（Next.js）
+
+前端位于 `frontend/`，使用 Next.js App Router、TypeScript、Tailwind CSS、shadcn/ui 风格组件和 Recharts。
+
+### 启动前端
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+默认 API 地址为 `http://127.0.0.1:8000`。如需覆盖：
+
+```bash
+NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000 npm run dev
+```
+
+### 前端路由结构
+
+- `/`：Dashboard，一键运行 market refresh、history refresh、signals、scores、capital-flow verification、AI analyze-top，并展示 Top/Enhanced Watchlist。
+- `/enhanced-watchlist`：Enhanced Watchlist，展示资金流来源、AI News Alpha 调整、增强分和新闻事件摘要。
+- `/daily-review`：每日复盘表单，支持读取 pending draft 并创建/更新复盘。
+- `/trade-plan`：盘前交易计划。
+- `/trade-log`：实际交易日志录入与当日日志查看。
+- `/plan-drift`：计划 vs 执行偏差分析。
+- `/review-stats`：最近 30 天复盘统计与 Recharts 图表。
+- `/ai-review-summary`：结构化 AI 复盘总结。
+
+后端已允许 CORS 来源：`http://localhost:3000`、`http://localhost:5173`。

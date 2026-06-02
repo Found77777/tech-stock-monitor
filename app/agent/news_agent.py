@@ -9,6 +9,7 @@ from urllib.parse import quote
 
 import httpx
 
+from app.agent.performance import AgentPerformanceMonitor
 from app.agent.prompts import BATCH_ANALYSIS_PROMPT, MARKET_OVERVIEW_PROMPT, SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,9 @@ class NewsAgent:
         self.llm_http_proxy = str(getattr(settings, "llm_http_proxy", "") or "").strip()
         self.news_sources = _build_news_sources(settings)
         self.last_source_debug: dict[str, Any] = {}
+        self.last_llm_status = "not_called"
+        self.last_llm_error = ""
+        self.last_llm_latency_ms = 0.0
 
 
     def _build_client_kwargs(self, timeout: float, use_llm_proxy: bool = False) -> dict:
@@ -42,23 +46,47 @@ class NewsAgent:
             return httpx.AsyncClient(**kwargs)
 
     async def analyze_stocks(self, stock_codes: list[str]) -> list[dict]:
-        news_items = await self._fetch_all_news(stock_codes)
+        monitor = AgentPerformanceMonitor()
+        with monitor.measure("fetch_all_news"):
+            news_items = await self._fetch_all_news(stock_codes)
+        self.last_source_debug["performance_ms"] = monitor.as_debug()
         if not news_items:
+            self.last_llm_status = "skipped_no_news"
             return []
         prompt = BATCH_ANALYSIS_PROMPT.format(stock_codes=", ".join(stock_codes), news_content=self._format_news(news_items))
-        raw = await self._call_llm(prompt)
-        parsed = self._parse_llm_response(raw)
-        return parsed if isinstance(parsed, list) else []
+        try:
+            raw = await self._call_llm(prompt)
+            parsed = self._parse_llm_response(raw)
+            if isinstance(parsed, list) and parsed:
+                self.last_llm_status = "ok"
+                return parsed
+            self.last_llm_status = "parse_failed"
+            self.last_llm_error = "LLM response did not parse into a non-empty list"
+            logger.warning("llm_parse_failed scope=stock_analysis stock_codes=%s raw_preview=%s", stock_codes, str(raw)[:300])
+        except Exception as exc:
+            self.last_llm_status = "call_failed"
+            self.last_llm_error = f"{type(exc).__name__}: {exc}"
+            logger.exception("llm_call_failed scope=stock_analysis stock_codes=%s error_type=%s", stock_codes, type(exc).__name__)
+        return self._fallback_stock_analyses(stock_codes, news_items)
 
     async def market_overview(self) -> dict:
         news_items = await self._fetch_market_news()
-        raw = await self._call_llm(MARKET_OVERVIEW_PROMPT.format(market_content=self._format_news(news_items)))
-        parsed = self._parse_llm_response(raw)
-        if isinstance(parsed, dict):
-            return parsed
-        if isinstance(parsed, list) and parsed:
-            return parsed[0]
-        return {}
+        try:
+            raw = await self._call_llm(MARKET_OVERVIEW_PROMPT.format(market_content=self._format_news(news_items)))
+            parsed = self._parse_llm_response(raw)
+            if isinstance(parsed, dict):
+                self.last_llm_status = "ok"
+                return parsed
+            if isinstance(parsed, list) and parsed:
+                self.last_llm_status = "ok"
+                return parsed[0]
+            self.last_llm_status = "parse_failed"
+            logger.warning("llm_parse_failed scope=market_overview raw_preview=%s", str(raw)[:300])
+        except Exception as exc:
+            self.last_llm_status = "call_failed"
+            self.last_llm_error = f"{type(exc).__name__}: {exc}"
+            logger.exception("llm_call_failed scope=market_overview error_type=%s", type(exc).__name__)
+        return self._fallback_market_overview(news_items)
 
     async def _fetch_all_news(self, stock_codes: list[str]) -> list[dict]:
         all_news: list[dict] = []
@@ -90,8 +118,8 @@ class NewsAgent:
                     source_success_counts[source.name] = source_success_counts.get(source.name, 0) + cnt
                     all_news.extend(got)
             except Exception as exc:
-                source_errors[source.name] = str(exc)
-                logger.exception("News source %s failed code=%s", source.name, code)
+                source_errors[source.name] = f"{type(exc).__name__}: {exc}"
+                logger.exception("news_source_failed source=%s code=%s error_type=%s", source.name, code, type(exc).__name__)
         before = len(all_news)
         normalized = _normalize_news_items(all_news)
         deduped = _dedup_news(normalized)
@@ -133,10 +161,63 @@ class NewsAgent:
             return "[]"
         headers = {"Authorization": f"Bearer {self.llm_api_key}", "Content-Type": "application/json"}
         payload = {"model": self.llm_model, "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user_prompt}], "temperature": 0.3, "max_tokens": 2048}
+        import time
+        started = time.perf_counter()
         async with self._create_async_client(timeout=60, use_llm_proxy=True) as client:
             resp = await client.post(f"{self.llm_base_url}/chat/completions", headers=headers, json=payload)
+            self.last_llm_latency_ms = round((time.perf_counter() - started) * 1000, 2)
+            logger.info("llm_response status_code=%s latency_ms=%.2f model=%s", resp.status_code, self.last_llm_latency_ms, self.llm_model)
             resp.raise_for_status()
             return resp.json()["choices"][0]["message"]["content"]
+
+    def _fallback_stock_analyses(self, stock_codes: list[str], news_items: list[dict]) -> list[dict]:
+        analyses: list[dict] = []
+        positive_words = ["中标", "订单", "预增", "突破", "利好", "签约", "政策", "补贴"]
+        negative_words = ["处罚", "减持", "诉讼", "预亏", "下修", "风险", "亏损"]
+        for code in stock_codes:
+            code_items = [x for x in news_items if str(x.get("stock_code", "")) in {"", str(code)}]
+            if not code_items:
+                continue
+            text = " ".join(f"{x.get('title','')} {x.get('summary','')}" for x in code_items[:5])
+            pos = sum(text.count(w) for w in positive_words)
+            neg = sum(text.count(w) for w in negative_words)
+            composite = max(-60, min(60, (pos - neg) * 18))
+            confidence = max(10, min(55, 15 + len(code_items) * 5 + (pos + neg) * 5))
+            risk_flags = [w for w in negative_words if w in text][:3]
+            analyses.append({
+                "stock_code": str(code).zfill(6)[-6:],
+                "analysis_date": datetime.now().strftime("%Y-%m-%d"),
+                "policy_sentiment": 20 if "政策" in text or "补贴" in text else 0,
+                "fundamental_event_score": max(-60, min(60, (pos - neg) * 15)),
+                "industry_momentum": 0,
+                "market_buzz_score": min(100, len(code_items) * 10),
+                "market_buzz_direction": composite,
+                "macro_impact": 0,
+                "composite_sentiment": composite,
+                "confidence": confidence,
+                "key_events": [x.get("title", "") for x in code_items[:3] if x.get("title")],
+                "risk_flags": risk_flags,
+                "summary": "LLM不可用，已基于规则引擎从已抓取新闻生成兜底分析",
+                "llm_fallback": True,
+            })
+        logger.info("rule_based_stock_analysis generated_count=%s stock_codes=%s", len(analyses), stock_codes)
+        return analyses
+
+    def _fallback_market_overview(self, news_items: list[dict]) -> dict:
+        text = " ".join(f"{x.get('title','')} {x.get('summary','')}" for x in news_items[:10])
+        policy_hits = sum(text.count(w) for w in ["政策", "国务院", "工信部", "补贴"])
+        risk_hits = sum(text.count(w) for w in ["风险", "下跌", "处罚", "监管"])
+        sentiment = max(-40, min(40, policy_hits * 10 - risk_hits * 10))
+        return {
+            "analysis_date": datetime.now().strftime("%Y-%m-%d"),
+            "market_sentiment": sentiment,
+            "tech_sector_sentiment": sentiment,
+            "policy_direction": "偏多" if policy_hits > risk_hits else "中性",
+            "key_themes": [],
+            "macro_risks": ["LLM不可用，市场概览使用规则兜底"],
+            "summary": "LLM不可用，已使用规则引擎生成市场概览",
+            "llm_fallback": True,
+        }
 
     @staticmethod
     def _parse_llm_response(raw: str):

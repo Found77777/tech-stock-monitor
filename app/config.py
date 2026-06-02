@@ -35,12 +35,8 @@ class Settings(BaseSettings):
     llm_base_url: str = Field(default="https://api.openai.com/v1")
     llm_model: str = Field(default="gpt-4o-mini")
     llm_http_proxy: str = Field(default="")
-    # ✅ 改进：默认使用官方 API 而不是爬虫
-    agent_news_sources: str = Field(default="tushare,akshare")
-    # ✅ 改进：默认启用 Agent
-    agent_enabled: bool = Field(default=True)
-    # ✅ 新增：Agent 调试模式
-    agent_debug_mode: bool = Field(default=False)
+    agent_news_sources: str = Field(default="sina,eastmoney,cninfo,baidu,rss")
+    agent_enabled: bool = Field(default=False)
     capital_flow_source: str = Field(default="proxy")  # proxy|eastmoney
     capital_flow_top_n: int = Field(default=10)
     capital_flow_verify_top_n: int = Field(default=20)

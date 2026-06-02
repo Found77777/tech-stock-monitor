@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
+
+import pandas as pd
 from sqlalchemy import desc, func
 from sqlalchemy.orm import Session
 
-from app.agent.news_alpha_integrator import integrate_news_alpha_to_analysis
 from app.factors.liquidity import add_liquidity_factors
 from app.factors.relative_strength import add_relative_strength_factors
 from app.factors.technical import add_technical_factors
@@ -169,7 +170,7 @@ class AnalysisService:
             if name.startswith("N") and name[1:].isdigit() and len(name) == 7:
                 logger.error("filtered dummy score row from latest_scores code=%s name=%s", code, name)
                 continue
-            out.append({"code":code,"name":name,"total_score":x.total_score,"trend_score":x.trend_score,"momentum_score":x.momentum_score,"relative_strength_score":x.relative_strength_score,"liqu[...]
+            out.append({"code":code,"name":name,"total_score":x.total_score,"trend_score":x.trend_score,"momentum_score":x.momentum_score,"relative_strength_score":x.relative_strength_score,"liquidity_score":x.liquidity_score,"position_score":x.position_score,"risk_penalty":x.risk_penalty,"recent_strength_score":x.momentum_score,"rank":x.rank,"reasons":json.loads(x.reasons) if x.reasons else []})
         return out
 
 

@@ -21,3 +21,11 @@ def test_llm_http_proxy_mapping(monkeypatch):
 
     settings = Settings()
     assert settings.llm_http_proxy == "http://127.0.0.1:7890"
+
+
+def test_agent_news_sources_default_include_resilient_sources():
+    from app.config import Settings
+
+    settings = Settings(_env_file=None)
+    sources = {x.strip() for x in settings.agent_news_sources.split(",")}
+    assert {"sina", "eastmoney", "cninfo", "baidu", "rss"}.issubset(sources)

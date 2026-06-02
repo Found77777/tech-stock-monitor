@@ -1,7 +1,11 @@
 """Scheduled jobs registration."""
+from datetime import datetime
+
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from app.config import get_settings
+from app.database import SessionLocal
+from app.review.service import ReviewService
 
 
 def pull_market_data_job() -> None:
@@ -12,9 +16,21 @@ def pull_market_data_job() -> None:
     print("[scheduler] pull_market_data_job executed")
 
 
+def create_daily_review_draft_job() -> None:
+    """Create a pending daily review draft after the A-share close if missing."""
+    db = SessionLocal()
+    try:
+        day = datetime.now().strftime("%Y-%m-%d")
+        ReviewService().create_review_draft(db, review_date=day)
+        print(f"[scheduler] daily review draft ensured for {day}")
+    finally:
+        db.close()
+
+
 def build_scheduler() -> BackgroundScheduler:
     """Create scheduler with placeholder jobs."""
     settings = get_settings()
     scheduler = BackgroundScheduler(timezone=settings.scheduler_timezone)
     scheduler.add_job(pull_market_data_job, "interval", minutes=30, id="pull_market_data_job", replace_existing=True)
+    scheduler.add_job(create_daily_review_draft_job, "cron", hour=15, minute=30, id="create_daily_review_draft_job", replace_existing=True)
     return scheduler
