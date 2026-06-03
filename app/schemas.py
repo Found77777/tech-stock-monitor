@@ -17,8 +17,3 @@ class UniverseItem(BaseModel):
     name: str
     sector: str
 
-
-class SignalItem(BaseModel):
-    symbol: str
-    signal: str
-    score: float

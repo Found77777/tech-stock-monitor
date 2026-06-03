@@ -169,3 +169,13 @@ curl -X POST http://127.0.0.1:8000/signals/generate
 curl -X POST http://127.0.0.1:8000/scores/generate
 curl "http://127.0.0.1:8000/watchlist/enhanced-top?limit=10"
 ```
+
+## Cleanup Notes
+
+Low-risk cleanup from `cleanup_report.md` removed stale `APP_HOST` / `APP_PORT` example settings. Backend bind host and port should be provided to the runner, for example:
+
+```bash
+uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+The shared API schemas keep only response models that are currently imported by the FastAPI routes.

@@ -15,9 +15,6 @@ class Settings(BaseSettings):
 
     app_name: str = Field(default="A-Share Tech Stock Monitor")
     app_env: str = Field(default="dev")
-    app_host: str = Field(default="127.0.0.1")
-    app_port: int = Field(default=8000)
-
     database_url: str = Field(default=f"sqlite:///{BASE_DIR / 'data' / 'tech_monitor.db'}")
 
     data_source_provider: str = Field(default="sina")
@@ -49,7 +46,7 @@ class Settings(BaseSettings):
     capital_flow_cache_enabled: bool = Field(default=True)
     enable_factor_redundancy_adjustment: bool = Field(default=False)
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=False)
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore")
 
 
 @lru_cache(maxsize=1)
