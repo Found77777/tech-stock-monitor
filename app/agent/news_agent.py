@@ -19,8 +19,8 @@ class NewsAgent:
     def __init__(self, settings: Any):
         self.settings = settings
         self.llm_api_key = getattr(settings, "llm_api_key", "")
-        self.llm_base_url = getattr(settings, "llm_base_url", "https://api.openai.com/v1")
-        self.llm_model = getattr(settings, "llm_model", "gpt-4o-mini")
+        self.llm_base_url = str(getattr(settings, "llm_base_url", "https://api.deepseek.com") or "https://api.deepseek.com").rstrip("/")
+        self.llm_model = getattr(settings, "llm_model", "deepseek-chat")
         self.llm_http_proxy = str(getattr(settings, "llm_http_proxy", "") or "").strip()
         self.news_sources = _build_news_sources(settings)
         self.last_source_debug: dict[str, Any] = {}

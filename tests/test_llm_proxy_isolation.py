@@ -10,3 +10,11 @@ def test_llm_proxy_only_for_llm_client_kwargs():
     assert llm_kwargs.get("proxy") == "http://127.0.0.1:7890"
     assert "proxy" not in data_kwargs
     assert llm_kwargs.get("trust_env") is False and data_kwargs.get("trust_env") is False
+
+
+def test_news_agent_defaults_to_deepseek_and_strips_base_url_slash():
+    from types import SimpleNamespace
+
+    agent = NewsAgent(SimpleNamespace(llm_http_proxy="", llm_api_key="", llm_base_url="https://api.deepseek.com/", llm_model="deepseek-chat", agent_news_sources="sina"))
+    assert agent.llm_base_url == "https://api.deepseek.com"
+    assert agent.llm_model == "deepseek-chat"

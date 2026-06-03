@@ -34,8 +34,8 @@ class Settings(BaseSettings):
 
     # --- AI Agent settings ---
     llm_api_key: str = Field(default="")
-    llm_base_url: str = Field(default="https://api.openai.com/v1")
-    llm_model: str = Field(default="gpt-4o-mini")
+    llm_base_url: str = Field(default="https://api.deepseek.com")
+    llm_model: str = Field(default="deepseek-chat")
     llm_http_proxy: str = Field(default="")
     agent_news_sources: str = Field(default="sina,eastmoney,cninfo,baidu,rss")
     agent_enabled: bool = Field(default=False)

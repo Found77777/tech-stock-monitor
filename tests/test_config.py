@@ -43,3 +43,11 @@ def test_data_source_and_capital_flow_defaults_are_safe(monkeypatch):
     assert settings.enable_data_source_fallback is True
     assert settings.capital_flow_source == "efinance"
     assert settings.capital_flow_allow_proxy is False
+
+
+def test_llm_defaults_use_deepseek_base():
+    from app.config import Settings
+
+    settings = Settings(_env_file=None)
+    assert settings.llm_base_url == "https://api.deepseek.com"
+    assert settings.llm_model == "deepseek-chat"

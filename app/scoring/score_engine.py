@@ -200,17 +200,45 @@ def compute_score(row: dict) -> dict:
     theme_eval = evaluate_theme(row)
     theme = theme_eval.get("primary_theme") or row.get("policy_theme") or row.get("theme")
     policy = _safe(theme_eval.get("policy_alignment_score", _policy_score(theme)))
-    concept_penalty = _safe(max(0.0, 100 - theme_eval.get("purity_score", 50)) / 4)
+
+    # Risk penalties must explain the final score. Keep each component capped so
+    # strong technical/liquidity candidates are not silently collapsed to zero.
+    purity = _safe(theme_eval.get("purity_score", 50), 0, 100)
+    concept_purity = str(row.get("concept_purity", "") or "").lower()
+    has_theme_hint = bool(row.get("policy_theme") or row.get("theme") or theme)
+    if concept_purity == "hype":
+        concept_penalty = 15.0
+    elif concept_purity == "weak":
+        concept_penalty = 8.0
+    elif concept_purity == "related":
+        concept_penalty = 3.0
+    elif concept_purity == "core":
+        concept_penalty = 0.0
+    elif not has_theme_hint:
+        concept_penalty = 0.0
+    elif purity < 30:
+        concept_penalty = 8.0
+    elif purity < 50:
+        concept_penalty = 5.0
+    elif purity < 70:
+        concept_penalty = 2.0
+    else:
+        concept_penalty = 0.0
+    concept_penalty = min(concept_penalty, 15.0)
+
     missing_penalty = 0.0
     if not fq:
-        missing_penalty += 6
+        missing_penalty += 4
         reasons.append("数据缺失风险：fundamental_quality 缺失")
     if not row.get("policy_theme") and not row.get("theme"):
-        missing_penalty += 4
+        missing_penalty += 3
         reasons.append("数据缺失风险：policy/theme 标签缺失")
-    if row.get("amount_ratio_5d") is None:
-        missing_penalty += 5
-        reasons.append("资金流 proxy 风险：amount_ratio_5d 缺失")
+    has_amount = row.get("amount") is not None or _safe(row.get("avg_amount_20d"), 0, 1e15) > 0 or bool(row.get("amount_estimated", False))
+    has_volume = row.get("volume") is not None
+    if row.get("amount_ratio_5d") is None and not (has_amount and has_volume):
+        missing_penalty += 3
+        reasons.append("资金流/量能数据缺失：amount_ratio_5d 缺失且无可用成交额/成交量")
+    missing_penalty = min(missing_penalty, 10.0)
 
     overheat = 0
     r20 = _safe(row.get("stock_return_20d", 0), -10, 10)
@@ -220,7 +248,7 @@ def compute_score(row: dict) -> dict:
     if d60 > 0.20: overheat += 15
     if dd120 > -0.10: overheat += 10
     if _safe(row.get("amount_ratio_5d", 0), -10, 100) > 3.5: overheat += 10
-    overheat = _safe(overheat)
+    overheat_penalty = min(_safe(overheat), 10.0)
 
     liquidity = _safe(row.get("liquidity_score", 0))
     avg_amount_20d = _safe(row.get("avg_amount_20d", 0), 0, 1e15)
@@ -241,7 +269,7 @@ def compute_score(row: dict) -> dict:
     policy = _safe(policy + ai_policy_boost)
     fundamental = _safe(fundamental + ai_fundamental_boost)
     ai_risk_flags = ai_data.get("ai_risk_flags", [])
-    ai_risk_penalty = min(len(ai_risk_flags) * 5, 15) if isinstance(ai_risk_flags, list) else 0.0
+    ai_risk_penalty = min(len(ai_risk_flags) * 5, 10) if isinstance(ai_risk_flags, list) else 0.0
     ai_reasons = ai_data.get("ai_reasons", [])
     if isinstance(ai_reasons, list):
         reasons.extend(ai_reasons)
@@ -249,27 +277,32 @@ def compute_score(row: dict) -> dict:
     fake_rebound = (ma60_slope < -0.002 and ma120_slope < -0.001 and d20 < 0 and _safe(row.get("price_volume_resonance", 0), -1, 1) < 0)
     if fake_rebound:
         overheat += 20
+        overheat_penalty = min(_safe(overheat), 10.0)
         trend = _safe(trend - 20)
         reasons.append("假反弹风险：MA60/MA120仍下行且股价未站上MA20，量价共振为负")
 
-    total = (0.12 * _safe(low_position) + 0.08 * _safe(fundamental) + 0.14 * _safe(policy) +
-             0.16 * _safe(cap) + 0.16 * _safe(trend) + 0.08 * _safe(liquidity) + 0.07 * _safe(recent_strength) +
-             0.12 * _safe(ai_sentiment) + market_adj + tech_adj -
-             _safe(concept_penalty) - _safe(overheat) - _safe(missing_penalty) - _safe(ai_risk_penalty) +
-             0.13 * _safe(theme_eval.get("theme_relevance_score", 0)))
-    total = _safe(total)
+    risk_cap = 35.0 if bool(row.get("extreme_risk_flag", False)) else 30.0
+    total_risk_penalty = min(concept_penalty + overheat_penalty + missing_penalty + ai_risk_penalty, risk_cap)
+    base_score = (
+        0.25 * _safe(trend)
+        + 0.20 * _safe(cap)
+        + 0.20 * _safe(policy)
+        + 0.15 * _safe(liquidity)
+        + 0.20 * _safe(low_position)
+    )
+    total = _safe(base_score - total_risk_penalty)
 
     reasons.extend([
         f"基本面：{row.get('fundamental_quality', 'missing')}（{fundamental:.0f}分）",
         f"主题研究：primary={theme_eval.get('primary_theme','')} secondary={theme_eval.get('secondary_theme','')} strength={theme_eval.get('theme_strength',0):.0f}",
         f"主题相关性：theme_relevance_score={theme_eval.get('theme_relevance_score',0):.0f} 研发={theme_eval.get('research_strength_score',0):.0f} 创新={theme_eval.get('innovation_score',0):.0f} 产业地位={theme_eval.get('industry_position_score',0):.0f}",
-        f"政策匹配：{theme if theme else '缺失'}（{policy:.0f}分） 纯度={theme_eval.get('purity_score',0):.0f}（惩罚{concept_penalty:.0f}）",
+        f"政策匹配：{theme if theme else '缺失'}（{policy:.0f}分） 纯度={theme_eval.get('purity_score',0):.0f}（概念纯度扣{concept_penalty:.0f}）",
         f"资金/量能：{cap_reason}（capital_flow_score={cap:.0f}分）",
         f"流动性：avg_amount_20d={avg_amount_20d:.0f}，avg_turnover_20d={avg_turnover_text}{amount_estimated_note}（liquidity_score={liquidity:.0f}分）",
         f"趋势恢复：trend_reversal_score={trend:.0f}，MA20斜率={ma20_slope:.2%}，MA60斜率={ma60_slope:.2%}",
         f"近期强度：recent_strength_score={recent_strength:.0f}（5日={r5:.2%}，10日={r10:.2%}，相对行业={rr:.2%}）",
         "MA结构恢复：关注 MA20/MA60/MA120 方向一致性",
-        f"风险提示：过热惩罚{overheat:.0f}",
+        f"风险惩罚：概念纯度扣{concept_penalty:.0f}，过热扣{overheat_penalty:.0f}，数据缺失扣{missing_penalty:.0f}，AI风险扣{ai_risk_penalty:.0f}，总扣{total_risk_penalty:.0f}",
         "主题标签静态风险：当前仍以规则与静态元数据为主，需结合财报/专利实证",
     ])
 
@@ -281,7 +314,7 @@ def compute_score(row: dict) -> dict:
         "relative_strength_score": round(_safe(policy), 2),  # policy_alignment_score
         "liquidity_score": round(_safe(liquidity), 2),
         "position_score": round(_safe(low_position), 2),  # low_position_score
-        "risk_penalty": round(_safe(concept_penalty + overheat), 2),
+        "risk_penalty": round(_safe(total_risk_penalty, 0, 35), 2),
         "recent_strength_score": round(_safe(recent_strength), 2),
         "reasons": reasons,
     }

@@ -170,3 +170,94 @@ def test_fake_rebound_gets_penalized():
         "volume_ratio_5d": 1.3,
     })
     assert good["total_score"] > fake["total_score"]
+
+
+def _risk_reason(result: dict) -> str:
+    return next(x for x in result["reasons"] if x.startswith("风险惩罚："))
+
+
+def test_risk_penalty_matches_breakdown_and_total_formula():
+    row = {
+        "trend_reversal_score": 85,
+        "net_inflow_1d": 1e7,
+        "net_inflow_5d": 5e7,
+        "net_inflow_10d": 1e8,
+        "amount_ratio_5d": 4.2,
+        "volume_ratio_5d": 1.5,
+        "price_volume_resonance": 1,
+        "liquidity_score": 80,
+        "drawdown_from_120d_high": -0.05,
+        "drawdown_from_250d_high": -0.25,
+        "percentile_250d": 35,
+        "consolidation_days": 12,
+        "ma_structure_score": 70,
+        "distance_to_ma20": 0.15,
+        "distance_to_ma60": 0.25,
+        "stock_return_5d": 0.2,
+        "stock_return_20d": 0.35,
+        "fundamental_quality": "medium",
+        "theme": "信创",
+        "policy_theme": "信创",
+        "concept_purity": "hype",
+        "_ai_analysis": {"ai_risk_flags": ["监管", "减持", "诉讼"]},
+    }
+    result = compute_score(row)
+    reason = _risk_reason(result)
+    assert "概念纯度扣15" in reason
+    assert "过热扣10" in reason
+    assert "数据缺失扣0" in reason
+    assert "AI风险扣10" in reason
+    assert result["risk_penalty"] == 30
+    base_score = (
+        0.25 * result["trend_score"]
+        + 0.20 * result["momentum_score"]
+        + 0.20 * result["relative_strength_score"]
+        + 0.15 * result["liquidity_score"]
+        + 0.20 * result["position_score"]
+    )
+    assert abs(result["total_score"] - max(0, min(100, base_score - result["risk_penalty"]))) <= 0.05
+
+
+def test_turnover_missing_and_estimated_amount_do_not_create_missing_penalty():
+    result = compute_score({
+        "amount": 100_000_000,
+        "volume": 1000,
+        "amount_estimated": True,
+        "avg_amount_20d": 100_000_000,
+        "avg_turnover_20d": None,
+        "amount_ratio_5d": None,
+        "liquidity_score": 80,
+        "fundamental_quality": "medium",
+        "theme": "信创",
+        "policy_theme": "信创",
+        "concept_purity": "core",
+    })
+    assert "数据缺失扣0" in _risk_reason(result)
+    assert result["risk_penalty"] <= 10
+
+
+def test_high_component_scores_are_not_silently_collapsed_to_zero():
+    result = compute_score({
+        "trend_reversal_score": 100,
+        "net_inflow_1d": 1e8,
+        "net_inflow_5d": 5e8,
+        "net_inflow_10d": 8e8,
+        "amount_ratio_5d": 1.5,
+        "volume_ratio_5d": 1.4,
+        "price_volume_resonance": 1,
+        "liquidity_score": 80,
+        "drawdown_from_120d_high": -0.2,
+        "drawdown_from_250d_high": -0.3,
+        "percentile_250d": 45,
+        "consolidation_days": 10,
+        "ma_structure_score": 50,
+        "fundamental_quality": "medium",
+        "theme": "弱相关概念",
+        "policy_theme": "弱相关概念",
+        "concept_purity": "hype",
+    })
+    assert result["trend_score"] >= 90
+    assert result["momentum_score"] >= 80
+    assert result["liquidity_score"] == 80
+    assert result["risk_penalty"] <= 30
+    assert result["total_score"] > 25

@@ -68,15 +68,19 @@ USE_MOCK_DATA=false
 ### 代理配置建议
 不再建议在 Terminal 全局 `export HTTP_PROXY/HTTPS_PROXY`。
 
-请在 `.env` 中仅配置 LLM 代理：
+请在 `.env` 中配置 DeepSeek 与 LLM 代理：
 
 ```
+LLM_API_KEY=sk-your-deepseek-key
+LLM_BASE_URL=https://api.deepseek.com
+LLM_MODEL=deepseek-chat
 LLM_HTTP_PROXY=http://127.0.0.1:7890
 ```
 
 说明：
-- DeepSeek/OpenAI 调用使用 `LLM_HTTP_PROXY`。
-- AKShare/EastMoney 直连（不走该代理）。
+- Agent 默认使用 DeepSeek OpenAI-compatible Chat Completions：`LLM_BASE_URL=https://api.deepseek.com`，`LLM_MODEL=deepseek-chat`。
+- DeepSeek 调用只使用 `LLM_HTTP_PROXY`，不依赖系统全局 HTTP_PROXY/HTTPS_PROXY。
+- AKShare/EastMoney/Sina 行情直连（不走该代理）。
 
 ### AI Agent 运维检查
 - `GET /agent/health`：查看 Agent 可用状态、启用的新闻源、LLM/代理配置状态与配置告警。
