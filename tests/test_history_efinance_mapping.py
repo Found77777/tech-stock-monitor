@@ -31,9 +31,9 @@ def test_history_fallback_prefers_efinance_then_sina(monkeypatch):
 
 
 def test_sina_fallback_amount_can_be_estimated_from_close_volume():
-    row = {"code": "600850", "trade_date": "2026-05-20", "close": 10.5, "volume": 1000, "amount": None, "turnover_rate": None}
+    row = {"code": "600850", "trade_date": "2026-05-20", "open": 10, "high": 11, "low": 9, "close": 10.5, "volume": 1000, "amount": None, "turnover_rate": None}
     out = _estimate_amount_if_missing(row, "sina")
-    assert out["amount"] == 10.5 * 1000 * 100
+    assert out["amount"] == ((10 + 11 + 9 + 10.5) / 4) * 1000 * 100
     assert out["_amount_estimated"] is True
 
 
@@ -85,7 +85,7 @@ def test_score_reasons_show_liquidity_amount_turnover_and_estimation_note():
     text = "\n".join(result["reasons"])
     assert "avg_amount_20d=100000000" in text
     assert "avg_turnover_20d=N/A" in text
-    assert "成交额由 close*volume*100 估算" in text
+    assert "成交额由OHLC均价×成交量估算" in text
 
 
 def test_history_refresh_falls_back_to_sina_and_estimates_amount(monkeypatch):
@@ -116,7 +116,7 @@ def test_history_refresh_falls_back_to_sina_and_estimates_amount(monkeypatch):
         assert result["inserted"] == 1
         row = db.query(DailyBar).filter_by(code="600850", trade_date="2026-05-20").first()
         assert row is not None
-        assert row.amount == 10.5 * 1000 * 100
+        assert row.amount == ((10 + 11 + 9 + 10.5) / 4) * 1000 * 100
         assert row.turnover_rate is None
     finally:
         db.close()

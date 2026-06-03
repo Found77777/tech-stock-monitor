@@ -122,13 +122,13 @@ NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000 npm run dev
 ```bash
 USE_MOCK_DATA=false
 REAL_DATA_SOURCE=sina
-HISTORY_DATA_SOURCE=efinance
+HISTORY_DATA_SOURCE=sina
 ENABLE_DATA_SOURCE_FALLBACK=true
 ```
 
-`REAL_DATA_SOURCE` 支持：`efinance`、`sina`、`akshare`、`mock`。当前推荐行情/K线使用 `sina`；AKShare/EastMoney 在部分网络环境下可能不稳定。开启 fallback 后，行情源按 `sina -> mock`、`efinance -> sina -> mock` 或 `akshare -> efinance -> sina -> mock` 降级，并在接口返回 `data_source_used`。
+`REAL_DATA_SOURCE` 支持：`efinance`、`sina`、`akshare`、`mock`。当前推荐实时行情使用 `sina`，历史K线也使用新浪高级日线接口；AKShare/EastMoney/efinance 行情在批量历史请求下可能不稳定。开启 fallback 后，行情源按 `sina -> mock`、`efinance -> sina -> mock` 或 `akshare -> efinance -> sina -> mock` 降级，并在接口返回 `data_source_used`。
 
-推荐配置：Sina 用于实时行情快照，efinance `get_quote_history` 用于历史K线（补全成交额/换手率），efinance `get_history_bill` 用于历史资金流。
+推荐配置：Sina 用于实时行情快照与新浪高级日线历史K线；历史K线的成交额由 OHLC 均价 × 成交股数估算，换手率只有在有可靠流通股本时才计算，否则显示 N/A；efinance `get_history_bill` 仅用于历史资金流。
 
 资金流配置默认不允许 proxy 静默伪装成真实资金流：
 
@@ -143,7 +143,7 @@ CAPITAL_FLOW_CACHE_ENABLED=true
 
 资金流状态说明：
 
-- `efinance_history_bill`：真实 efinance `get_history_bill` 历史资金流，`capital_flow_confidence=70`，推荐用于资金流验证。
+- `efinance_history_bill`：真实 efinance `get_history_bill` 历史资金流，`capital_flow_confidence` 会按来源置信度和数据完整度动态计算，推荐用于资金流验证。
 - `real_eastmoney`：真实 EastMoney/AKShare 单股资金流，`capital_flow_is_real=true`。
 - `proxy_estimated`：量价估算资金流，不是真实主力资金流；仅当显式 `CAPITAL_FLOW_SOURCE=proxy` 时使用，最多影响 ±2 分。
 - `unavailable`：真实资金流不可用，未使用 proxy 估算，`capital_flow_adjustment=0`。

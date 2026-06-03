@@ -23,23 +23,23 @@ def _history_source_name() -> str:
     settings = get_settings()
     if settings.use_mock_data:
         return "mock"
-    return str(getattr(settings, "history_data_source", "efinance") or "efinance").lower()
+    return str(getattr(settings, "history_data_source", "sina") or "sina").lower()
 
 
 def _history_fallback_chain(primary: str) -> list[str]:
     settings = get_settings()
     if settings.use_mock_data:
         return ["mock"]
-    primary = str(primary or "efinance").lower()
+    primary = str(primary or "sina").lower()
     if not bool(getattr(settings, "enable_data_source_fallback", True)):
         return [primary]
     chains = {
         "efinance": ["efinance", "sina", "mock"],
-        "sina": ["sina", "efinance", "mock"],
-        "akshare": ["akshare", "efinance", "sina", "mock"],
+        "sina": ["sina", "mock"],
+        "akshare": ["akshare", "sina", "mock"],
         "mock": ["mock"],
     }
-    return chains.get(primary, [primary, "efinance", "sina", "mock"])
+    return chains.get(primary, [primary, "sina", "mock"])
 
 
 def _bars_have_amount(bars) -> bool:
@@ -61,16 +61,23 @@ def _estimate_amount_if_missing(row: dict, source_name: str) -> dict:
     except Exception:
         amount_value = None
     if amount_value is not None and amount_value > 0:
+        row.setdefault("amount_estimated", bool(row.get("amount_estimated", False)))
         return row
     try:
-        close = float(row.get("close"))
+        o = float(row.get("open"))
+        h = float(row.get("high"))
+        l = float(row.get("low"))
+        c = float(row.get("close"))
         volume = float(row.get("volume"))
     except Exception:
         return row
-    if close > 0 and volume > 0:
-        row["amount"] = close * volume * 100
+    volume_shares = float(row.get("volume_raw") or volume * 100)
+    avg_price = (o + h + l + c) / 4.0
+    if avg_price > 0 and volume_shares > 0:
+        row["amount"] = avg_price * volume_shares
+        row["amount_estimated"] = True
         row["_amount_estimated"] = True
-        logger.warning("history amount estimated code=%s source=%s trade_date=%s", row.get("code"), source_name, row.get("trade_date"))
+        logger.warning("history amount estimated code=%s source=%s trade_date=%s method=ohlc_avg_x_volume", row.get("code"), source_name, row.get("trade_date"))
     return row
 
 class HistoryDataService:
@@ -166,7 +173,12 @@ class HistoryDataService:
                 row["name"] = self._resolve_name(db, row["code"], name_map, row.get("name"))
                 row["trade_date"] = str(row["trade_date"])
                 row = _estimate_amount_if_missing(row, used_for_code)
-                row.pop("_amount_estimated", None)
+                internal_amount_estimated = row.pop("_amount_estimated", False)
+                public_amount_estimated = row.pop("amount_estimated", False)
+                amount_estimated = bool(internal_amount_estimated or public_amount_estimated)
+                row.pop("turnover_rate_estimated", None)
+                row.pop("volume_raw", None)
+                logger.info("history row code=%s source=%s rows=%s amount_estimated=%s", row["code"], used_for_code, len(bars), amount_estimated)
                 exists = db.query(DailyBar).filter_by(code=row["code"], trade_date=row["trade_date"]).first()
                 if exists:
                     continue

@@ -42,11 +42,13 @@ class AnalysisService:
             bars = db.query(DailyBar).filter_by(code=code).order_by(DailyBar.trade_date.asc()).all()
             if len(bars) < 25:
                 continue
-            d = pd.DataFrame([{"code":b.code,"name":b.name,"trade_date":b.trade_date,"close":b.close,"volume":b.volume,"amount":b.amount,"turnover_rate":b.turnover_rate} for b in bars])
+            d = pd.DataFrame([{"code":b.code,"name":b.name,"trade_date":b.trade_date,"open":b.open,"high":b.high,"low":b.low,"close":b.close,"volume":b.volume,"amount":b.amount,"turnover_rate":b.turnover_rate} for b in bars])
             d["amount_estimated"] = False
             try:
-                estimated_amount = d["close"].astype(float) * d["volume"].astype(float) * 100
-                d["amount_estimated"] = d["turnover_rate"].isna() & d["amount"].notna() & ((d["amount"].astype(float) - estimated_amount).abs() <= estimated_amount.abs() * 0.001)
+                ohlc_avg = (d["open"].astype(float) + d["high"].astype(float) + d["low"].astype(float) + d["close"].astype(float)) / 4.0
+                estimated_amount = ohlc_avg * d["volume"].astype(float) * 100
+                tolerance = estimated_amount.abs() * 0.001 + 1.0
+                d["amount_estimated"] = d["turnover_rate"].isna() & d["amount"].notna() & ((d["amount"].astype(float) - estimated_amount).abs() <= tolerance)
             except Exception:
                 d["amount_estimated"] = False
             d = add_technical_factors(d)

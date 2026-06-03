@@ -22,7 +22,7 @@ class Settings(BaseSettings):
 
     data_source_provider: str = Field(default="sina")
     real_data_source: str = Field(default="sina")
-    history_data_source: str = Field(default="efinance")
+    history_data_source: str = Field(default="sina")
     tushare_token: str = Field(default="")
     sina_user_agent: str | None = Field(default=None)
     sina_cookie: str | None = Field(default=None)

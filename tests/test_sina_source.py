@@ -1,3 +1,6 @@
+from datetime import date
+
+from app.data_sources import sina_source as sina_module
 from app.data_sources.sina_source import SinaDataSource
 from app.services.market_data_service import MarketDataService
 
@@ -15,35 +18,71 @@ def test_source_switch_mock_fallback():
     assert hasattr(svc.source, 'get_realtime_quotes')
 
 
-def test_sina_daily_rows_flattened_values_not_nested():
+def test_sina_advanced_kline_maps_ohlcv_amount_and_null_turnover(monkeypatch):
     s = SinaDataSource()
-    fake = {
-        "data": {
-            "sh600000": {
-                "qfqday": [
-                    ["2026-05-20", "10.0", "10.2", "10.3", "9.9", "1000", "10000"],
-                    ["2026-05-21", "10.2", "10.1", "10.4", "10.0", "900", {"bad": 1}],
-                ],
-                "meta": {"x": 1},
-            }
-        }
-    }
+    payload = '[{"day":"2026-05-20","open":"10.0","high":"11.0","low":"9.0","close":"10.5","volume":"10000"}]'
+    captured = {}
 
     class R:
+        text = payload
         def raise_for_status(self):
             return None
-        def json(self):
-            return fake
 
-    import requests
-    old = requests.get
-    requests.get = lambda *args, **kwargs: R()
-    try:
-        df = s.fetch_daily_bars("600000", "2026-05-01", "2026-05-30")
-    finally:
-        requests.get = old
+    def fake_get(url, params=None, headers=None, timeout=None):
+        captured["url"] = url
+        captured["params"] = params
+        captured["headers"] = headers
+        return R()
 
-    assert len(df) >= 1
-    for _, row in df.iterrows():
-        for v in row.to_dict().values():
-            assert not isinstance(v, (dict, list, tuple))
+    monkeypatch.setattr(sina_module.requests, "get", fake_get)
+    df = s.fetch_daily_bars("600000", "2026-05-01", "2026-05-30")
+    row = df.iloc[0]
+    assert captured["params"]["symbol"] == "sh600000"
+    assert captured["params"]["scale"] == 240
+    assert captured["headers"]["User-Agent"] == "Mozilla/5.0"
+    assert row["trade_date"] == "2026-05-20"
+    assert row["open"] == 10.0
+    assert row["high"] == 11.0
+    assert row["low"] == 9.0
+    assert row["close"] == 10.5
+    assert row["volume_raw"] == 10000.0
+    assert row["volume"] == 100.0  # daily_bars.volume remains in hands
+    assert row["amount"] == ((10.0 + 11.0 + 9.0 + 10.5) / 4) * 10000.0
+    assert bool(row["amount_estimated"]) is True
+    assert row["turnover_rate"] is None
+    assert bool(row["turnover_rate_estimated"]) is False
+
+
+def test_sina_get_history_defaults_end_date_to_today_without_fixed_date(monkeypatch):
+    class FakeDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2030, 1, 2)
+
+    payload = '[{"day":"2030-01-02","open":"10","high":"10","low":"10","close":"10","volume":"100"}]'
+    captured = {}
+
+    class R:
+        text = payload
+        def raise_for_status(self):
+            return None
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        captured["params"] = params
+        return R()
+
+    monkeypatch.setattr(sina_module, "date", FakeDate)
+    monkeypatch.setattr(sina_module.requests, "get", fake_get)
+    df = SinaDataSource().get_history("000001", days=1)
+    assert captured["params"]["symbol"] == "sz000001"
+    assert captured["params"]["datalen"] == 1
+    assert list(df["trade_date"]) == ["2030-01-02"]
+
+
+def test_sina_turnover_uses_float_shares_only_when_supplied():
+    rows = [{"day": "2026-05-20", "open": "10", "high": "10", "low": "10", "close": "10", "volume": "1000"}]
+    s = SinaDataSource()
+    without_float = s.normalize_history_rows(rows, "600000")
+    with_float = s.normalize_history_rows(rows, "600000", float_shares=10_000)
+    assert without_float.iloc[0]["turnover_rate"] is None
+    assert with_float.iloc[0]["turnover_rate"] == 10.0

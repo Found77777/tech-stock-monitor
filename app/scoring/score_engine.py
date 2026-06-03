@@ -229,7 +229,7 @@ def compute_score(row: dict) -> dict:
         avg_turnover_text = f"{avg_turnover_raw:.2f}%" if not math.isnan(avg_turnover_raw) and not math.isinf(avg_turnover_raw) else "N/A"
     except Exception:
         avg_turnover_text = "N/A"
-    amount_estimated_note = "；成交额由 close*volume*100 估算" if bool(row.get("amount_estimated", False)) else ""
+    amount_estimated_note = "；成交额由OHLC均价×成交量估算" if bool(row.get("amount_estimated", False)) else ""
     # --- AI Agent sentiment integration ---
     ai_data = row.get("_ai_analysis", {})
     ai_sentiment = _safe(ai_data.get("ai_sentiment_score", 50), 0, 100)
