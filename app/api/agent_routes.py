@@ -25,7 +25,7 @@ from app.models import DailyBar, DailyMarketIntelligence, EnhancedStockScore, Ne
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-_CAPITAL_FLOW_CACHE: dict[tuple[str, str], dict] = {}
+_CAPITAL_FLOW_CACHE: dict[tuple, dict] = {}
 
 
 def _norm_code(code: str) -> str:
@@ -230,14 +230,25 @@ def _capital_flow_meta(source: str, error_type: str | None = None, error_message
         return {"capital_flow_source": source, "capital_flow_confidence": 80, "capital_flow_is_real": True, "capital_flow_is_estimated": False, "capital_flow_error_type": error_type, "capital_flow_error_message": error_message, "capital_flow_source_attempted": attempted or "eastmoney"}
     if source == "efinance_history_bill":
         return {"capital_flow_source": source, "capital_flow_confidence": 70, "capital_flow_is_real": True, "capital_flow_is_estimated": False, "capital_flow_error_type": error_type, "capital_flow_error_message": error_message, "capital_flow_source_attempted": attempted or "efinance"}
+    if source == "sina_volume_amount":
+        return {"capital_flow_source": source, "capital_flow_confidence": 50, "capital_flow_is_real": False, "capital_flow_is_estimated": True, "capital_flow_error_type": error_type, "capital_flow_error_message": error_message, "capital_flow_source_attempted": attempted or "sina"}
     if source == "efinance":
         return {"capital_flow_source": source, "capital_flow_confidence": 60, "capital_flow_is_real": False, "capital_flow_is_estimated": False, "capital_flow_error_type": error_type, "capital_flow_error_message": error_message, "capital_flow_source_attempted": attempted or "efinance"}
-    if source == "proxy_estimated":
-        return {"capital_flow_source": source, "capital_flow_confidence": 30, "capital_flow_is_real": False, "capital_flow_is_estimated": True, "capital_flow_error_type": error_type, "capital_flow_error_message": error_message, "capital_flow_source_attempted": attempted or "proxy"}
+    if source in {"proxy_estimated", "proxy", "proxy_fallback"}:
+        return {"capital_flow_source": "proxy_estimated", "capital_flow_confidence": 30, "capital_flow_is_real": False, "capital_flow_is_estimated": True, "capital_flow_error_type": error_type, "capital_flow_error_message": error_message, "capital_flow_source_attempted": attempted or "proxy"}
+    if source == "not_verified":
+        return {"capital_flow_source": source, "capital_flow_confidence": 0, "capital_flow_is_real": False, "capital_flow_is_estimated": False, "capital_flow_error_type": error_type, "capital_flow_error_message": error_message, "capital_flow_source_attempted": attempted or "not_verified"}
     if source == "none":
         return {"capital_flow_source": source, "capital_flow_confidence": 0, "capital_flow_is_real": False, "capital_flow_is_estimated": False, "capital_flow_error_type": error_type, "capital_flow_error_message": error_message, "capital_flow_source_attempted": attempted or "none"}
     return {"capital_flow_source": "unavailable", "capital_flow_confidence": 0, "capital_flow_is_real": False, "capital_flow_is_estimated": False, "capital_flow_error_type": error_type, "capital_flow_error_message": error_message, "capital_flow_source_attempted": attempted or source}
 
+
+
+def _visible_capital_flow_source(source: str, settings) -> str:
+    source = str(source or "not_verified")
+    if source in {"proxy", "proxy_fallback", "proxy_estimated"} and not bool(getattr(settings, "capital_flow_allow_proxy", False)):
+        return "not_verified"
+    return source
 
 def _proxy_capital_flow_payload(attempted: str = "proxy", error_type: str | None = None, error_message: str = "") -> dict:
     payload = {
@@ -262,20 +273,113 @@ def _unavailable_capital_flow_payload(attempted: str, error_type: str | None = N
     }
 
 
-def _fetch_capital_flow_with_cache(code: str, trade_date: str, settings, force_refresh: bool = False) -> dict:
-    key = (_norm_code(code), trade_date)
+
+def _sina_volume_amount_flow_payload(code: str, trade_date: str, db: Session | None) -> dict:
+    if db is None:
+        return _unavailable_capital_flow_payload("sina", "MissingDatabaseSession", "Sina量价资金强度需要daily_bars数据", attempts_used=0)
+    norm = _norm_code(code)
+    rows = (
+        db.query(DailyBar)
+        .filter(DailyBar.code == norm, DailyBar.trade_date <= trade_date)
+        .order_by(desc(DailyBar.trade_date))
+        .limit(20)
+        .all()
+    )
+    ordered = list(reversed(rows))
+    if len(ordered) < 5:
+        payload = _unavailable_capital_flow_payload("sina", "InsufficientDailyBars", f"Sina日线不足5条: {len(ordered)}", attempts_used=0)
+        payload["capital_flow_reason"] = "Sina日线不足，无法计算量价资金强度"
+        return payload
+
+    closes = [_sanitize_num(r.close, 0, 1e6) for r in ordered]
+    amounts = [_sanitize_num(r.amount, 0, 1e15) for r in ordered]
+    valid_amounts = [x for x in amounts if x > 0]
+    amount_completeness = len(valid_amounts) / max(len(amounts), 1)
+    latest_amount = amounts[-1] if amounts else 0.0
+    avg5 = sum(amounts[-5:]) / min(len(amounts), 5)
+    avg10 = sum(amounts[-10:]) / min(len(amounts), 10)
+    avg20 = sum(amounts[-20:]) / min(len(amounts), 20)
+    prior_avg = sum(amounts[-20:-5]) / len(amounts[-20:-5]) if len(amounts[-20:-5]) > 0 else avg20
+    amount_ratio_5d = (avg5 / prior_avg) if prior_avg > 0 else 0.0
+    ret5 = ((closes[-1] - closes[-5]) / closes[-5] * 100) if len(closes) >= 5 and closes[-5] > 0 else 0.0
+    ret10 = ((closes[-1] - closes[-10]) / closes[-10] * 100) if len(closes) >= 10 and closes[-10] > 0 else ret5
+
+    adjustment = 0.0
+    signal = "量价中性"
+    if amount_ratio_5d >= 1.25 and ret5 > 0:
+        adjustment = min(3.0, 1.0 + min(2.0, (amount_ratio_5d - 1.0) * 2.0) + min(1.0, ret5 / 8.0))
+        signal = "放量上涨"
+    elif amount_ratio_5d >= 1.25 and ret5 < 0:
+        adjustment = max(-3.0, -1.0 - min(2.0, (amount_ratio_5d - 1.0) * 2.0) - min(1.0, abs(ret5) / 8.0))
+        signal = "放量下跌"
+    elif amount_ratio_5d < 0.70:
+        adjustment = -1.0
+        signal = "成交额明显萎缩"
+    elif ret5 > 0:
+        adjustment = 0.5
+        signal = "缩量上涨"
+    elif ret5 < 0:
+        adjustment = -0.5
+        signal = "缩量下跌"
+
+    data_confidence = 0.0
+    if amount_completeness >= 0.95:
+        data_confidence += 30.0
+    else:
+        data_confidence += amount_completeness * 30.0
+    data_confidence += min(30.0, len(ordered) / 20.0 * 30.0)
+    if (amount_ratio_5d >= 1.15 and abs(ret5) >= 1.0) or (amount_ratio_5d < 0.80):
+        data_confidence += 20.0
+    if amount_ratio_5d > 4.0 or abs(ret5) > 20.0:
+        data_confidence -= 15.0
+    confidence = _sanitize_num(data_confidence, 0, 80)
+    reason = (
+        f"Sina量价资金强度：1日成交额={latest_amount:.0f}，5/10/20日均额={avg5:.0f}/{avg10:.0f}/{avg20:.0f}，"
+        f"5日成交额放大倍数={amount_ratio_5d:.2f}，5日涨跌幅={ret5:.2f}%，10日涨跌幅={ret10:.2f}%，价量信号={signal}；"
+        "基于成交额、成交量和价格共振估算，不代表真实主力资金流"
+    )
+    return {
+        "net_inflow_1d": latest_amount,
+        "net_inflow_5d": avg5,
+        "net_inflow_10d": avg10,
+        "avg_amount_20d": avg20,
+        "amount_ratio_5d": amount_ratio_5d,
+        "return_5d": ret5,
+        "return_10d": ret10,
+        "capital_flow_adjustment": _sanitize_num(adjustment, -3, 3),
+        "capital_flow_confidence": confidence,
+        "capital_flow_reason": reason,
+        "attempts_used": 1,
+        "success_attempt": 1,
+        **_capital_flow_meta("sina_volume_amount"),
+        "capital_flow_confidence": confidence,
+        "capital_flow_error_type": None,
+        "capital_flow_error_message": None,
+    }
+
+def _fetch_capital_flow_with_cache(code: str, trade_date: str, settings, force_refresh: bool = False, db: Session | None = None) -> dict:
+    source = str(getattr(settings, "capital_flow_source", "sina")).lower()
+    allow_proxy = bool(getattr(settings, "capital_flow_allow_proxy", False))
+    key = (_norm_code(code), trade_date, source, allow_proxy)
     cache_enabled = bool(getattr(settings, "capital_flow_cache_enabled", True))
     if cache_enabled and not force_refresh and key in _CAPITAL_FLOW_CACHE:
         return _CAPITAL_FLOW_CACHE[key]
 
-    source = str(getattr(settings, "capital_flow_source", "eastmoney")).lower()
     if source == "none":
         payload = {"net_inflow_1d": 0.0, "net_inflow_5d": 0.0, "net_inflow_10d": 0.0, "attempts_used": 0, "success_attempt": None, **_capital_flow_meta("none")}
         if cache_enabled:
             _CAPITAL_FLOW_CACHE[key] = payload
         return payload
     if source == "proxy":
-        payload = _proxy_capital_flow_payload(attempted="proxy")
+        if not allow_proxy:
+            payload = _unavailable_capital_flow_payload("proxy", "ProxyDisabled", "CAPITAL_FLOW_ALLOW_PROXY=false，未使用proxy估算", attempts_used=0)
+        else:
+            payload = _proxy_capital_flow_payload(attempted="proxy")
+        if cache_enabled:
+            _CAPITAL_FLOW_CACHE[key] = payload
+        return payload
+    if source == "sina":
+        payload = _sina_volume_amount_flow_payload(code, trade_date, db)
         if cache_enabled:
             _CAPITAL_FLOW_CACHE[key] = payload
         return payload
@@ -401,13 +505,17 @@ async def analyze_top(req: AnalyzeTopRequest, db: Session = Depends(get_db)):
             ai_reasons = ["已抓取新闻，但未识别出高置信alpha事件，暂不调整评分"]
 
         base_total = _sanitize_num(float(getattr(s, "base_total_score", 0) or getattr(s, "total_score", 0)), 0, 100)
-        capital_adj = _sanitize_num(float(getattr(s, "capital_flow_adjustment", 0)), -8, 8)
-        pre_ai_enhanced = _sanitize_num(float(getattr(s, "enhanced_score", 0) or (base_total + capital_adj)), 0, 100)
-        ai_score = _sanitize_num(pre_ai_enhanced + alpha_adj, 0, 100)
         # Layer 3 must not trigger expensive EastMoney/AKShare verification.
         # Reuse Layer 2 metadata when present; otherwise mark capital flow as not verified.
-        flow_source = str(getattr(s, "capital_flow_source", "not_verified") or "not_verified")
+        flow_source = _visible_capital_flow_source(getattr(s, "capital_flow_source", "not_verified") or "not_verified", settings)
         flow_meta = _capital_flow_meta(flow_source)
+        capital_adj = _sanitize_num(float(getattr(s, "capital_flow_adjustment", 0)), -8, 8)
+        if flow_source in {"not_verified", "unavailable", "none"}:
+            capital_adj = 0.0
+            pre_ai_enhanced = base_total
+        else:
+            pre_ai_enhanced = _sanitize_num(float(getattr(s, "enhanced_score", 0) or (base_total + capital_adj)), 0, 100)
+        ai_score = _sanitize_num(pre_ai_enhanced + alpha_adj, 0, 100)
         reason_text = str(getattr(s, "reasons", "") or "")
         conf_match = re.search(r"置信度=([0-9.]+)", reason_text)
         capital_flow_confidence = flow_meta["capital_flow_confidence"]
@@ -494,6 +602,12 @@ async def analyze_top(req: AnalyzeTopRequest, db: Session = Depends(get_db)):
             "enhanced_score": row["ai_adjusted_score"],
             "reasons": json.dumps(row.get("risk_flags", []), ensure_ascii=False),
             "enhanced_rank": row["new_rank"],
+            "capital_flow_source": row.get("capital_flow_source", "not_verified"),
+            "capital_flow_confidence": row.get("capital_flow_confidence", 0),
+            "capital_flow_reason": row.get("capital_flow_reason", ""),
+            "capital_flow_is_real": row.get("capital_flow_is_real", False),
+            "capital_flow_is_estimated": row.get("capital_flow_is_estimated", False),
+            "capital_flow_adjustment": row.get("capital_flow_adjustment", 0),
         }
         if es:
             for k, v in payload.items():

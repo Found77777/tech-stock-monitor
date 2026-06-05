@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import csv
 import json
 import logging
 import re
 from datetime import datetime
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
@@ -120,31 +123,45 @@ class NewsAgent:
             except Exception as exc:
                 source_errors[source.name] = f"{type(exc).__name__}: {exc}"
                 logger.exception("news_source_failed source=%s code=%s error_type=%s", source.name, code, type(exc).__name__)
-        before = len(all_news)
+        raw_news_count = len(all_news)
         normalized = _normalize_news_items(all_news)
-        deduped = _dedup_news(normalized)
+        filtered, rejection_debug = _filter_company_news(normalized, code)
+        filtered_news_count = len(filtered)
+        deduped = _dedup_news(filtered)
         after = len(deduped)
         if after == 0:
-            if before == 0 and source_errors:
+            if raw_news_count == 0 and source_errors:
                 reason = "source_errors_only"
-            elif before == 0:
+                message = "新闻源请求失败，未找到公司级新闻。"
+            elif raw_news_count == 0:
                 reason = "all_sources_empty"
+                message = "未找到公司级新闻。"
             else:
-                reason = "parsed_but_filtered_out"
+                reason = "no_company_level_news"
+                message = "未找到公司级新闻。"
         else:
             reason = "ok"
+            message = ""
         debug = {
             "code": code,
             "source_success_counts": source_success_counts,
             "source_errors": source_errors,
-            "total_before_dedupe": before,
+            "raw_news_count": raw_news_count,
+            "filtered_news_count": filtered_news_count,
+            "valid_news_count": after,
+            "rejected_reason": rejection_debug["reason_counts"],
+            "rejected_items": rejection_debug["items"][:20],
+            "total_before_dedupe": filtered_news_count,
             "total_after_dedupe": after,
             "final_return_count": after,
             "debug_reason": reason,
+            "message": message,
             "final_news": deduped[:10],
         }
-        logger.info("stock_news_aggregate code=%s source_success_counts=%s total_before_dedupe=%s total_after_dedupe=%s final_return_count=%s debug_reason=%s",
-                    code, source_success_counts, before, after, after, reason)
+        logger.info(
+            "stock_news_aggregate code=%s source_success_counts=%s raw_news_count=%s filtered_news_count=%s valid_news_count=%s rejected_reason=%s debug_reason=%s",
+            code, source_success_counts, raw_news_count, filtered_news_count, after, rejection_debug["reason_counts"], reason,
+        )
         return deduped, debug
 
     async def _fetch_market_news(self) -> list[dict]:
@@ -269,9 +286,10 @@ class SinaFinanceNews(_BaseNewsSource):
                     resp = await self._get(client, url, headers={"User-Agent": "Mozilla/5.0"})
                     if resp.status_code == 200:
                         titles = re.findall(r'<a[^>]*href="(https?://finance\.sina[^\"]*)"[^>]*>([^<]+)</a>', resp.text)
-                        for link, title in titles[:8]:
+                        raw_count = len(titles)
+                        for link, title in titles[:50]:
                             items.append({"source": "新浪财经", "title": title.strip(), "summary": "", "url": link, "publish_time": datetime.now().strftime("%Y-%m-%d"), "stock_code": code})
-                        logger.info("news_parse source=%s code=%s parsed_news_count=%s", self.name, code, len(titles[:8]))
+                        logger.info("news_parse source=%s code=%s raw_news_count=%s parsed_news_count=%s", self.name, code, raw_count, len(titles[:50]))
                 except Exception:
                     logger.exception("Sina news fetch failed code=%s", code)
         return items
@@ -408,6 +426,89 @@ class RssNewsFallback(_BaseNewsSource):
                 except Exception:
                     logger.exception("RSS fallback failed code=%s", code)
         return items
+
+
+_NAVIGATION_MENU_TITLES = {"财经首页", "新浪首页", "新闻首页", "行情中心", "我的自选"}
+_GENERIC_CHANNEL_TITLES = {"股票", "基金", "港股", "美股", "债券", "期货", "外汇", "理财", "保险"}
+_COMPANY_SUFFIXES = ("股份有限公司", "有限责任公司", "集团股份", "集团", "股份", "科技", "控股", "有限")
+
+
+def _normalize_code(code: str) -> str:
+    digits = re.sub(r"\D", "", str(code or ""))
+    return digits[-6:].zfill(6) if digits else ""
+
+
+def _count_chinese_chars(text: str) -> int:
+    return len(re.findall(r"[\u4e00-\u9fff]", text or ""))
+
+
+@lru_cache(maxsize=1)
+def _load_universe_names() -> dict[str, str]:
+    path = Path(__file__).resolve().parents[2] / "data" / "tech_universe_mainboard.csv"
+    names: dict[str, str] = {}
+    try:
+        with path.open(encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                code = _normalize_code(row.get("code", ""))
+                name = str(row.get("name", "") or "").strip()
+                if code and name:
+                    names[code] = name
+    except Exception as exc:
+        logger.warning("company_alias_load_failed path=%s error_type=%s error=%s", path, type(exc).__name__, exc)
+    return names
+
+
+def _company_aliases(code: str) -> set[str]:
+    norm_code = _normalize_code(code)
+    aliases = {norm_code} if norm_code else set()
+    if norm_code:
+        aliases.update({f"sz{norm_code}", f"sh{norm_code}"})
+    name = _load_universe_names().get(norm_code, "")
+    if name:
+        aliases.add(name)
+        for suffix in _COMPANY_SUFFIXES:
+            if name.endswith(suffix) and len(name) > len(suffix):
+                aliases.add(name[: -len(suffix)])
+    return {x for x in aliases if x}
+
+
+def _reject_reason_for_company_news(item: dict, code: str) -> str:
+    title = str(item.get("title", "") or "").strip()
+    compact_title = re.sub(r"\s+", "", title)
+    if compact_title in _NAVIGATION_MENU_TITLES:
+        return "navigation_menu"
+    if compact_title in _GENERIC_CHANNEL_TITLES:
+        return "generic_channel"
+    if _count_chinese_chars(compact_title) < 4:
+        return "title_too_short"
+
+    text = f"{title} {item.get('summary', '')}".lower()
+    aliases = _company_aliases(code)
+    if not any(alias.lower() in text for alias in aliases):
+        return "no_company_entity"
+    return ""
+
+
+def _filter_company_news(items: list[dict], code: str) -> tuple[list[dict], dict[str, Any]]:
+    kept: list[dict] = []
+    reason_counts: dict[str, int] = {}
+    rejected_items: list[dict] = []
+    for item in items:
+        reason = _reject_reason_for_company_news(item, code)
+        if reason:
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+            rejected_items.append({
+                "title": item.get("title", ""),
+                "source": item.get("source", ""),
+                "rejected_reason": reason,
+            })
+            logger.info(
+                "news_rejected code=%s source=%s rejected_reason=%s title=%s",
+                code, item.get("source", ""), reason, item.get("title", ""),
+            )
+            continue
+        kept.append(item)
+    return kept, {"reason_counts": reason_counts, "items": rejected_items}
 
 
 def _normalize_news_items(items: list[dict]) -> list[dict]:

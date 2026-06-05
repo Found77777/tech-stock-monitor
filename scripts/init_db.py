@@ -11,4 +11,6 @@ from app import models  # noqa: F401
 
 if __name__ == "__main__":
     Base.metadata.create_all(bind=engine)
+    from scripts.migrate_capital_flow_defaults import migrate as migrate_capital_flow_defaults
+    migrate_capital_flow_defaults()
     print("Database initialized.")

@@ -1,5 +1,5 @@
 """SQLAlchemy ORM models."""
-from sqlalchemy import Column, DateTime, Float, Integer, String, UniqueConstraint, Text
+from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, UniqueConstraint, Text
 from sqlalchemy.sql import func
 
 from app.database import Base
@@ -101,7 +101,11 @@ class EnhancedStockScore(Base):
     base_rank = Column(Integer, nullable=False, default=0)
     base_total_score = Column(Float, nullable=False, default=0.0)
     capital_flow_score = Column(Float, nullable=False, default=0.0)
-    capital_flow_source = Column(String(32), nullable=False, default="proxy")
+    capital_flow_source = Column(String(32), nullable=False, default="not_verified")
+    capital_flow_confidence = Column(Float, nullable=False, default=0.0)
+    capital_flow_reason = Column(Text, nullable=True)
+    capital_flow_is_real = Column(Boolean, nullable=False, default=False)
+    capital_flow_is_estimated = Column(Boolean, nullable=False, default=False)
     capital_flow_adjustment = Column(Float, nullable=False, default=0.0)
     ai_adjustment = Column(Float, nullable=False, default=0.0)
     enhanced_score = Column(Float, nullable=False, default=0.0)

@@ -60,10 +60,10 @@ export default function DashboardPage() {
   useEffect(() => { load(); }, []);
 
   const realCount = enhanced.filter((x) => x.capital_flow_source === "real_eastmoney").length;
-  const proxyCount = enhanced.filter((x) => x.capital_flow_source === "proxy_fallback").length;
+  const sinaVolumeCount = enhanced.filter((x) => x.capital_flow_source === "sina_volume_amount").length;
   const aiAnalyzed = aiItems.length || enhanced.filter((x) => Number(x.ai_adjustment || x.news_alpha_adjustment || 0) !== 0).length;
   const statChart = stats ? [{ name: "Win%", value: stats.win_rate * 100 }, { name: "Discipline", value: stats.average_discipline_score }, { name: "PnL", value: stats.average_pnl }, { name: "Drawdown", value: Math.abs(stats.max_drawdown) }] : [];
-  const riskNotes = [`proxy_fallback: ${proxyCount}`, `real_eastmoney: ${realCount}`, `API: ${API_BASE_URL}`];
+  const riskNotes = [`sina_volume_amount: ${sinaVolumeCount}`, `real_eastmoney: ${realCount}`, `API: ${API_BASE_URL}`];
 
   return (
     <div className="space-y-6">
@@ -76,7 +76,7 @@ export default function DashboardPage() {
       <ErrorState error={error} />
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <MetricCard title="今日候选数" value={top.length} subtitle={status?.data_source || "watchlist candidates"} tone="info" />
-        <MetricCard title="Enhanced Top 数量" value={enhanced.length} subtitle={`${realCount} real / ${proxyCount} proxy`} tone={proxyCount ? "warning" : "positive"} />
+        <MetricCard title="Enhanced Top 数量" value={enhanced.length} subtitle={`${realCount} real / ${sinaVolumeCount} sina`} tone={sinaVolumeCount ? "info" : "positive"} />
         <MetricCard title="AI 已分析数量" value={aiAnalyzed} subtitle="News Alpha calibrated" tone={aiAnalyzed ? "positive" : "warning"} icon={<Sparkles className="h-4 w-4" />} />
         <MetricCard title="今日复盘状态" value={review.status || "none"} subtitle={review.review_date || todayISO()} tone={review.status === "completed" ? "positive" : review.status === "pending" ? "warning" : "neutral"} />
       </div>

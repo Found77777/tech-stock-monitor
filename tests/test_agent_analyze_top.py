@@ -78,9 +78,20 @@ def test_analyze_top_rerank_fields(monkeypatch):
     assert "original_rank" in row and "new_rank" in row
 
 
-def test_capital_flow_proxy_default():
+def test_capital_flow_proxy_requires_explicit_allow():
     class S:
         capital_flow_source = "proxy"
+        capital_flow_allow_proxy = False
+    agent_routes._CAPITAL_FLOW_CACHE.clear()
+    out = agent_routes._fetch_capital_flow_with_cache("000001", "2026-05-27", S())
+    assert out["capital_flow_source"] == "unavailable"
+    assert out["capital_flow_is_estimated"] is False
+
+
+def test_capital_flow_proxy_allowed_when_explicit():
+    class S:
+        capital_flow_source = "proxy"
+        capital_flow_allow_proxy = True
     agent_routes._CAPITAL_FLOW_CACHE.clear()
     out = agent_routes._fetch_capital_flow_with_cache("000001", "2026-05-27", S())
     assert out["capital_flow_source"] == "proxy_estimated"

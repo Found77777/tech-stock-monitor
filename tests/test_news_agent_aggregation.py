@@ -8,7 +8,7 @@ class GoodSina:
     name = "sina_finance"
     async def fetch(self, stock_codes):
         code = stock_codes[0]
-        return [{"source": "新浪财经", "title": f"t{i}", "url": f"u{i}", "publish_time": "2026-05-27", "summary": "", "stock_code": code} for i in range(8)]
+        return [{"source": "新浪财经", "title": f"海格通信中标重大订单{i}", "url": f"u{i}", "publish_time": "2026-05-27", "summary": "", "stock_code": code} for i in range(8)]
     async def fetch_market(self):
         return []
 
@@ -54,7 +54,7 @@ def test_dedupe_not_drop_all_valid_sina():
     class DupSina(GoodSina):
         async def fetch(self, stock_codes):
             code = stock_codes[0]
-            return [{"source": "新浪财经", "title": "same", "url": "u1", "publish_time": "2026-05-27", "summary": "", "stock_code": code} for _ in range(8)]
+            return [{"source": "新浪财经", "title": "海格通信获得重大订单", "url": "u1", "publish_time": "2026-05-27", "summary": "", "stock_code": code} for _ in range(8)]
     agent.news_sources = [DupSina()]
     items, debug = asyncio.run(agent.fetch_stock_news("002465"))
     assert len(items) == 1
